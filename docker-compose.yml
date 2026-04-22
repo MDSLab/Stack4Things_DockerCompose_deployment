@@ -4,6 +4,7 @@ services:
   ca_service:
     image: debian:buster
     container_name: ca_service
+    platform: linux/amd64
     networks:
       - s4t
     volumes:
@@ -37,6 +38,7 @@ services:
   crossbar:
     image: crossbario/crossbar
     container_name: crossbar
+    platform: linux/amd64
     restart: unless-stopped
     networks:
       - s4t
@@ -117,6 +119,7 @@ services:
   iotronic-wstun:
     image: lucadagati/iotronic-wstun:latest
     container_name: iotronic-wstun
+    platform: linux/amd64
     restart: unless-stopped
     networks:
       - s4t
@@ -262,6 +265,7 @@ services:
   keystone:
     image: lucadagati/iotronic-keystone
     container_name: keystone
+    platform: linux/amd64
     restart: unless-stopped
     depends_on:
       iotronic-db:
@@ -451,6 +455,7 @@ services:
   iotronic-wagent:
     image: lucadagati/iotronic-wagent:latest
     container_name: iotronic-wagent
+    platform: linux/amd64
     restart: unless-stopped
     depends_on:
       iotronic-db:
@@ -489,6 +494,7 @@ services:
   iotronic-ui:
     image: lucadagati/iotronic-ui:latest
     container_name: iotronic-ui
+    platform: linux/amd64
     restart: unless-stopped
     depends_on:
       iotronic-db:
@@ -505,6 +511,7 @@ services:
 
   lightning-rod:
     image: lucadagati/lrod:compose
+    platform: linux/amd64
     container_name: lightning-rod
     restart: unless-stopped
     privileged: true
@@ -521,7 +528,7 @@ services:
     tty: true
     entrypoint: /bin/sh
     command: >
-      -c "sed -i \"s|self\\.wstun_ip *= .*|self.wstun_ip = \\\"iotronic-wstun\\\"|\" /usr/local/lib/python3*/site-packages/iotronic_lightningrod/modules/service_manager.py && exec startLR"
+      -c "pip install cbor2 cbor && sed -i \"s|self\\.wstun_ip *= .*|self.wstun_ip = \\\"iotronic-wstun\\\"|\" /usr/local/lib/python3*/site-packages/iotronic_lightningrod/modules/service_manager.py && exec startLR"
 
 networks:
   s4t:
