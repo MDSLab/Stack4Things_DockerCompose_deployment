@@ -1,40 +1,46 @@
 version: "3.8"
 
 services:
+
   ca_service:
-    image: debian:buster
+    image: cfssl/cfssl
     container_name: ca_service
-    platform: linux/amd64
     networks:
       - s4t
     volumes:
-      - iotronic_ssl:/etc/ssl/iotronic  # Condiviso con iotronic-wstun
-    entrypoint: ["/bin/bash", "-c"]
+      - iotronic_ssl:/etc/ssl/iotronic
+    entrypoint: [ "/bin/sh", "-c" ]
+    healthcheck:
+      test: ["CMD", "test", "-f", "/etc/ssl/iotronic/crossbar.pem"]
+      interval: 5s
+      retries: 10
+      start_period: 15s
     command:
       - |
-        echo "[INFO] Installazione di OpenSSL..."
-        apt-get update && apt-get install -y openssl &&
-        
-        echo "[INFO] Generazione della Root CA..."
-        mkdir -p /etc/ssl/iotronic &&
-        cd /etc/ssl/iotronic &&
-        
-        openssl genrsa -out iotronic_CA.key 2048 &&
-        openssl req -x509 -new -nodes -key iotronic_CA.key -sha256 -days 18250 \
-          -subj "/C=IT/O=iotronic" -out iotronic_CA.pem &&
-        
-        echo "[INFO] Generazione della chiave privata e del certificato per Crossbar..."
-        openssl genrsa -out crossbar.key 2048 &&
-        openssl req -new -key crossbar.key -subj "/C=IT/O=iotronic/CN=crossbar" -out crossbar.csr &&
-        openssl x509 -req -in crossbar.csr -CA iotronic_CA.pem -CAkey iotronic_CA.key -CAcreateserial -out crossbar.pem -days 18250 -sha256 &&
-        
-        echo "[INFO] Impostazione permessi certificati..."
-        chmod 644 iotronic_CA.key iotronic_CA.pem crossbar.key crossbar.pem
-        chmod 755 /etc/ssl/iotronic
-        
-        echo "[INFO] Certificati generati con successo."
-        tail -f /dev/null
+        if [ -f /etc/ssl/iotronic/crossbar.pem ] && [ -f /etc/ssl/iotronic/iotronic_CA.pem ]; then
+          echo "[INFO] Certs already exist, skipping."
+        else
+          mkdir -p /etc/ssl/iotronic
+          cd /etc/ssl/iotronic
 
+          echo "[INFO] Generating Root CA..."
+          echo '{"CN":"iotronic","key":{"algo":"rsa","size":2048},"names":[{"C":"IT","O":"iotronic"}]}' \
+            | cfssl genkey -initca - \
+            | cfssljson -bare iotronic_CA
+
+          echo "[INFO] Generating Crossbar cert..."
+          echo '{"CN":"crossbar","hosts":["crossbar","localhost"],"key":{"algo":"rsa","size":2048},"names":[{"C":"IT","O":"iotronic"}]}' \
+            | cfssl gencert \
+                -ca=iotronic_CA.pem \
+                -ca-key=iotronic_CA-key.pem \
+                -profile=www - \
+            | cfssljson -bare crossbar
+
+          chmod 644 /etc/ssl/iotronic/*
+          echo "[INFO] Done."
+        fi
+
+        tail -f /dev/null
   crossbar:
     image: crossbario/crossbar
     container_name: crossbar
@@ -47,15 +53,12 @@ services:
       - crossbar_data:/node/.crossbar
     ports:
       - "8181:8181"
-    entrypoint: ["/bin/sh", "-c"]
+    depends_on:
+      ca_service:
+        condition: service_healthy
+    entrypoint: [ "/bin/sh", "-c" ]
     command:
       - |
-        echo "[INFO] Attesa dei certificati..."
-        while [ ! -f /node/.crossbar/ssl/crossbar.pem ] || [ ! -f /node/.crossbar/ssl/crossbar.key ]; do
-          sleep 2
-        done
-        echo "[INFO] Certificati trovati!"
-
         echo "[INFO] Scrittura configurazione Crossbar..."
         cat <<EOF > /node/.crossbar/config.json
         {
@@ -93,7 +96,7 @@ services:
                           "port": 8181,
                           "tls": {
                                 "chain_certificates": ["/node/.crossbar/ssl/iotronic_CA.pem"],
-                                "key": "/node/.crossbar/ssl/crossbar.key",
+                                "key": "/node/.crossbar/ssl/crossbar-key.pem",
                                 "certificate": "/node/.crossbar/ssl/crossbar.pem"
                           }
                         },
@@ -128,24 +131,16 @@ services:
       - "50001-50100:50001-50100"
     volumes:
       - iotronic_ssl:/var/lib/iotronic/ssl
-    entrypoint: ["/bin/sh", "-c"]
+    depends_on:
+      ca_service:
+        condition: service_healthy
+    entrypoint: [ "/bin/sh", "-c" ]
     command:
       - |
-        set -x  # DEBUG: Mostra i comandi eseguiti
-        echo "[INFO] Verifica permessi certificati..."
-        ls -l /var/lib/iotronic/ssl
-        while [ ! -e /var/lib/iotronic/ssl/iotronic_CA.pem ] || [ ! -e /var/lib/iotronic/ssl/crossbar.key ]; do
-          echo "[DEBUG] Certificati mancanti:"
-          ls -l /var/lib/iotronic/ssl
-          sleep 2
-        done
-
-        echo "[INFO] Certificati SSL trovati!"
-        ls -l /var/lib/iotronic/ssl
-
-        echo "[INFO] Avvio di iotronic-wstun..."
-        exec node /usr/local/lib/node_modules/@mdslab/wstun/bin/wstun.js -r -s 8080 --ssl=true --key=/var/lib/iotronic/ssl/iotronic_CA.key --cert=/var/lib/iotronic/ssl/iotronic_CA.pem
-
+        exec node /usr/local/lib/node_modules/@mdslab/wstun/bin/wstun.js \
+          -r -s 8080 --ssl=true \
+          --key=/var/lib/iotronic/ssl/iotronic_CA-key.pem \
+          --cert=/var/lib/iotronic/ssl/iotronic_CA.pem
   iotronic-db:
     image: mariadb:focal
     container_name: iotronic-db
@@ -162,12 +157,22 @@ services:
     volumes:
       - unime_iotronic_db_data:/var/lib/mysql
     healthcheck:
-      test: ["CMD", "mysqladmin", "ping", "-h", "localhost", "-u", "root", "-punime"]
+      test:
+        [
+          "CMD",
+          "mysqladmin",
+          "ping",
+          "-h",
+          "localhost",
+          "-u",
+          "root",
+          "-punime",
+        ]
       interval: 10s
       retries: 5
       start_period: 40s
       timeout: 5s
-    entrypoint: ["/bin/bash", "-c"]
+    entrypoint: [ "/bin/bash", "-c" ]
     command:
       - |
         set -e
@@ -215,8 +220,6 @@ services:
         echo "MariaDB avviato correttamente!"
         wait $$PID_MYSQL
 
-
-        
   rabbitmq:
     image: rabbitmq:3.7-management
     container_name: rabbitmq
@@ -232,7 +235,7 @@ services:
     networks:
       - s4t
     healthcheck:
-      test: ["CMD", "rabbitmqctl", "status"]
+      test: [ "CMD", "rabbitmqctl", "status" ]
       interval: 10s
       retries: 5
       start_period: 10s
@@ -244,23 +247,19 @@ services:
         condition: service_healthy
     networks:
       - s4t
-    entrypoint: ["/bin/sh", "-c"]
+    entrypoint: [ "/bin/sh", "-c" ]
     command: >
-      echo 'Aspettando RabbitMQ...';
-      for i in {1..30}; do
+      echo 'Aspettando RabbitMQ...'; for i in {1..30}; do
         if rabbitmqctl status; then
           echo 'RabbitMQ è pronto!';
           break;
         fi
         echo 'RabbitMQ non ancora pronto, riprovo in 5 secondi...';
         sleep 5;
-      done;
-      echo "Configurazione dell'utente openstack...";
-      rabbitmqctl add_user openstack unime;
-      rabbitmqctl set_permissions openstack '.*' '.*' '.*';
-      rabbitmqctl set_user_tags openstack administrator;
-      echo 'Utente openstack creato con successo.';
-
+      done; echo "Configurazione dell'utente openstack..."; rabbitmqctl add_user
+      openstack unime; rabbitmqctl set_permissions openstack '.*' '.*' '.*';
+      rabbitmqctl set_user_tags openstack administrator; echo 'Utente openstack
+      creato con successo.';
 
   keystone:
     image: lucadagati/iotronic-keystone
@@ -296,12 +295,12 @@ services:
     ports:
       - "5000:5000"
     volumes:
-#      - ./conf_keystone:/etc/keystone
+      #      - ./conf_keystone:/etc/keystone
       - keystone_data:/var/lib/keystone
       - /var/log/keystone:/var/log/keystone
       - /var/log/keystone-api:/var/log/apache2
     healthcheck:
-      test: ["CMD", "test", "-f", "/tmp/keystone-setup-done"]
+      test: [ "CMD", "test", "-f", "/tmp/keystone-setup-done" ]
       interval: 10s
       timeout: 5s
       retries: 5
@@ -333,7 +332,7 @@ services:
       FLUSH PRIVILEGES;
       EOF
 
-      
+
       echo '[INFO] Creazione delle cartelle per le chiavi Fernet e credenziali...';
       mkdir -p /etc/keystone/fernet-keys;
       mkdir -p /etc/keystone/credential-keys;
@@ -374,7 +373,7 @@ services:
       su -s /bin/sh -c 'openstack service create iot --name Iotronic' keystone;
       echo '[INFO] Iotronic User Create...';
       su -s /bin/sh -c 'openstack user create --password unime iotronic' keystone;
-      
+
       echo '[INFO] Iotronic roles...';
       su -s /bin/sh -c 'openstack role add --project service --user iotronic admin' keystone;
       su -s /bin/sh -c 'openstack role create admin_iot_project' keystone;
@@ -388,7 +387,7 @@ services:
       su -s /bin/sh -c 'openstack endpoint create --region RegionOne iot internal http://iotronic-conductor:8812' keystone;
       su -s /bin/sh -c 'openstack endpoint create --region RegionOne iot admin http://iotronic-conductor:8812' keystone;
       echo '[INFO] End of configuration!';  
-      
+
       touch /tmp/keystone-setup-done;  
 
       exec tail -f /dev/null"
@@ -412,9 +411,7 @@ services:
       DB_HOST: ${DB_HOST}
       IOTRONIC_DB_NAME: ${IOTRONIC_DB_NAME}
       IOTRONIC_DB_USER: ${IOTRONIC_DB_USER}
-      IOTRONIC_DBPASS: ${IOTRONIC_DBPASS}
-
-            # Stringa di connessione
+      IOTRONIC_DBPASS: ${IOTRONIC_DBPASS} # Stringa di connessione
       DB_CONNECTION_STRING: ${DB_CONNECTION_STRING}
 
       # Credenziali OpenStack
@@ -430,7 +427,7 @@ services:
       - ./conf_conductor:/etc/iotronic
       - iotronic_logs:/var/log/iotronic
     healthcheck:
-      test: ["CMD", "test", "-f", "/tmp/conductor-setup-done"]
+      test: [ "CMD", "test", "-f", "/tmp/conductor-setup-done" ]
       interval: 10s
       timeout: 5s
       retries: 5
@@ -448,7 +445,7 @@ services:
         chown -R iotronic:iotronic /var/log/iotronic;
         echo '[INFO] Avvio di Iotronic Conductor...';
         echo '[INFO] End of configuration!';  
-      
+
         touch /tmp/conductor-setup-done;  
         exec /usr/local/bin/startConductor"
 
@@ -528,7 +525,10 @@ services:
     tty: true
     entrypoint: /bin/sh
     command: >
-      -c "pip install cbor2 cbor && sed -i \"s|self\\.wstun_ip *= .*|self.wstun_ip = \\\"iotronic-wstun\\\"|\" /usr/local/lib/python3*/site-packages/iotronic_lightningrod/modules/service_manager.py && exec startLR"
+      -c "pip install cbor2 cbor && sed -i \"s|self\\.wstun_ip *=
+      .*|self.wstun_ip = \\\"iotronic-wstun\\\"|\"
+      /usr/local/lib/python3*/site-packages/iotronic_lightningrod/modules/service_manager.py
+      && exec startLR"
 
 networks:
   s4t:
