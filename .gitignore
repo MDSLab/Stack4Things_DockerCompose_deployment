@@ -1,0 +1,8 @@
+/.npm-cache
+__pycache__/
+*.pyc
+*.pyo
+*.pyd
+.Python
+.DS_Store
+

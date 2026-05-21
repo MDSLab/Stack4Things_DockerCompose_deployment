@@ -1,7 +1,6 @@
 version: "3.8"
 
 services:
-
   ca_service:
     image: cfssl/cfssl
     container_name: ca_service
@@ -9,7 +8,7 @@ services:
       - s4t
     volumes:
       - iotronic_ssl:/etc/ssl/iotronic
-    entrypoint: [ "/bin/sh", "-c" ]
+    entrypoint: ["/bin/sh", "-c"]
     healthcheck:
       test: ["CMD", "test", "-f", "/etc/ssl/iotronic/crossbar.pem"]
       interval: 5s
@@ -49,14 +48,14 @@ services:
     networks:
       - s4t
     volumes:
-      - iotronic_ssl:/node/.crossbar/ssl  # Condiviso con iotronic-wstun
+      - iotronic_ssl:/node/.crossbar/ssl # Condiviso con iotronic-wstun
       - crossbar_data:/node/.crossbar
     ports:
       - "8181:8181"
     depends_on:
       ca_service:
         condition: service_healthy
-    entrypoint: [ "/bin/sh", "-c" ]
+    entrypoint: ["/bin/sh", "-c"]
     command:
       - |
         echo "[INFO] Scrittura configurazione Crossbar..."
@@ -118,7 +117,6 @@ services:
 
         echo "[INFO] Avvio di Crossbar..."
         crossbar start
-
   iotronic-wstun:
     image: lucadagati/iotronic-wstun:latest
     container_name: iotronic-wstun
@@ -134,7 +132,7 @@ services:
     depends_on:
       ca_service:
         condition: service_healthy
-    entrypoint: [ "/bin/sh", "-c" ]
+    entrypoint: ["/bin/sh", "-c"]
     command:
       - |
         exec node /usr/local/lib/node_modules/@mdslab/wstun/bin/wstun.js \
@@ -172,7 +170,7 @@ services:
       retries: 5
       start_period: 40s
       timeout: 5s
-    entrypoint: [ "/bin/bash", "-c" ]
+    entrypoint: ["/bin/bash", "-c"]
     command:
       - |
         set -e
@@ -236,7 +234,7 @@ services:
     networks:
       - s4t
     healthcheck:
-      test: [ "CMD", "rabbitmqctl", "status" ]
+      test: ["CMD", "rabbitmqctl", "status"]
       interval: 10s
       retries: 5
       start_period: 10s
@@ -248,7 +246,7 @@ services:
         condition: service_healthy
     networks:
       - s4t
-    entrypoint: [ "/bin/sh", "-c" ]
+    entrypoint: ["/bin/sh", "-c"]
     command: >
       echo 'Aspettando RabbitMQ...'; for i in {1..30}; do
         if rabbitmqctl status; then
@@ -301,7 +299,7 @@ services:
       - /var/log/keystone:/var/log/keystone
       - /var/log/keystone-api:/var/log/apache2
     healthcheck:
-      test: [ "CMD", "test", "-f", "/tmp/keystone-setup-done" ]
+      test: ["CMD", "test", "-f", "/tmp/keystone-setup-done"]
       interval: 10s
       timeout: 5s
       retries: 5
@@ -370,24 +368,29 @@ services:
       fi
 
       echo '[INFO] Creazione dei servizi di Iotronic...';
-      su -s /bin/sh -c 'openstack project create --domain default --description \"Service Project\" service' keystone;
-      su -s /bin/sh -c 'openstack service create iot --name Iotronic' keystone;
-      echo '[INFO] Iotronic User Create...';
-      su -s /bin/sh -c 'openstack user create --password unime iotronic' keystone;
+      if ! su -s /bin/sh -c 'openstack service list --format value -c Type' keystone | grep -q '^iot$'; then
+        su -s /bin/sh -c 'openstack project create --domain default --description \"Service Project\" service' keystone;
+        su -s /bin/sh -c 'openstack service create iot --name Iotronic' keystone;
+        echo '[INFO] Iotronic User Create...';
+        su -s /bin/sh -c 'openstack user create --password unime iotronic' keystone;
 
-      echo '[INFO] Iotronic roles...';
-      su -s /bin/sh -c 'openstack role add --project service --user iotronic admin' keystone;
-      su -s /bin/sh -c 'openstack role create admin_iot_project' keystone;
-      su -s /bin/sh -c 'openstack role create manager_iot_project' keystone;
-      su -s /bin/sh -c 'openstack role create user_iot' keystone;
-      su -s /bin/sh -c 'openstack role add --project service --user iotronic admin_iot_project' keystone;
-      su -s /bin/sh -c 'openstack role add --project admin --user admin admin_iot_project' keystone;
+        echo '[INFO] Iotronic roles...';
+        su -s /bin/sh -c 'openstack role add --project service --user iotronic admin' keystone;
+        su -s /bin/sh -c 'openstack role create admin_iot_project' keystone;
+        su -s /bin/sh -c 'openstack role create manager_iot_project' keystone;
+        su -s /bin/sh -c 'openstack role create user_iot' keystone;
+        su -s /bin/sh -c 'openstack role add --project service --user iotronic admin_iot_project' keystone;
+        su -s /bin/sh -c 'openstack role add --project admin --user admin admin_iot_project' keystone;
 
-      echo '[INFO] Iotronic endpoints...';
-      su -s /bin/sh -c 'openstack endpoint create --region RegionOne iot public http://iotronic-conductor:8812' keystone;
-      su -s /bin/sh -c 'openstack endpoint create --region RegionOne iot internal http://iotronic-conductor:8812' keystone;
-      su -s /bin/sh -c 'openstack endpoint create --region RegionOne iot admin http://iotronic-conductor:8812' keystone;
-      echo '[INFO] End of configuration!';  
+        echo '[INFO] Iotronic endpoints...';
+        su -s /bin/sh -c 'openstack endpoint create --region RegionOne iot public http://iotronic-conductor:8812' keystone;
+        su -s /bin/sh -c 'openstack endpoint create --region RegionOne iot internal http://iotronic-conductor:8812' keystone;
+        su -s /bin/sh -c 'openstack endpoint create --region RegionOne iot admin http://iotronic-conductor:8812' keystone;
+        echo '[INFO] Iotronic services created.';
+      else
+        echo '[INFO] Iotronic service already exists, skipping creation.';
+      fi;
+      echo '[INFO] End of configuration!';
 
       touch /tmp/keystone-setup-done;  
 
@@ -428,7 +431,7 @@ services:
       - ./conf_conductor:/etc/iotronic
       - iotronic_logs:/var/log/iotronic
     healthcheck:
-      test: [ "CMD", "test", "-f", "/tmp/conductor-setup-done" ]
+      test: ["CMD", "test", "-f", "/tmp/conductor-setup-done"]
       interval: 10s
       timeout: 5s
       retries: 5
@@ -453,6 +456,7 @@ services:
   iotronic-wagent:
     image: lucadagati/iotronic-wagent:latest
     container_name: iotronic-wagent
+    hostname: iotronic-wagent
     platform: linux/amd64
     restart: unless-stopped
     depends_on:
@@ -461,6 +465,8 @@ services:
       rabbitmq:
         condition: service_healthy
       iotronic-conductor:
+        condition: service_healthy
+      ca_service:
         condition: service_healthy
     networks:
       - s4t
@@ -482,10 +488,28 @@ services:
     volumes:
       - ./conf_wagent:/etc/iotronic
       - iotronic_logs:/var/log/iotronic
+      - wagent_outbox:/var/lib/wagent
+    healthcheck:
+      test:
+        [
+          "CMD",
+          "python3",
+          "-c",
+          "import socket; socket.create_connection(('crossbar', 8181), timeout=3)",
+        ]
+      interval: 10s
+      timeout: 5s
+      retries: 5
+      start_period: 30s
     command: >
       /bin/bash -c "
         echo '[INFO] Configurazione dei permessi sui log...';
         chown -R iotronic:iotronic /var/log/iotronic;
+        echo '[INFO] Inizializzazione outbox...';
+        mkdir -p /var/lib/wagent;
+        python3 -c 'import sys; sys.path.insert(0, \"/etc/iotronic\"); from wagent_outbox import init_db; init_db()';
+        echo '[INFO] Pulizia registrazioni wagent obsolete...';
+        python3 -c 'import pymysql; conn = pymysql.connect(host=\"iotronic-db\", user=\"iotronic\", password=\"unime\", database=\"iotronic\"); conn.cursor().execute(\"UPDATE wampagents SET online=0 WHERE ragent=1\"); conn.commit(); conn.close(); print(\"[INFO] Stale wampagent registrations cleared.\")';
         echo '[INFO] Avvio del Wagent...';
         exec /usr/local/bin/iotronic-wamp-agent --config-file /etc/iotronic/iotronic.conf"
 
@@ -502,7 +526,7 @@ services:
     networks:
       - s4t
     ports:
-      - "80:80"
+      - "8088:80"
     volumes:
       - iotronic-ui_logs:/var/log/apache2
       - ./conf_ui:/etc/openstack-dashboard
@@ -517,6 +541,9 @@ services:
       - s4t
     ports:
       - "1474:1474"
+    depends_on:
+      iotronic-wagent:
+        condition: service_healthy
     volumes:
       - lr_var:/var/lib/iotronic
       - lr_le:/etc/letsencrypt/
@@ -549,4 +576,4 @@ volumes:
   lr_le:
   lr_nginx:
   lr_confs:
-
+  wagent_outbox:
