@@ -6,3 +6,5 @@ __pycache__/
 .Python
 .DS_Store
 
+scripts/venv/
+conf_ditto/nginx.htpasswd

@@ -1,5 +1,3 @@
-version: "3.8"
-
 services:
   ca_service:
     image: cfssl/cfssl
@@ -367,6 +365,25 @@ services:
         echo '[INFO] Apache è già in esecuzione.';
       fi
 
+      # Apache is started in the background above and needs a few seconds to
+      # bind :5000. Without this wait every 'openstack' call below fails with
+      # 'Connection refused', the guard on 'service list' then wrongly decides
+      # the iot service is missing, all the creates fail too, and the script
+      # still reports success and marks itself healthy with an empty catalog.
+      # Horizon's IoT section is broken as a result. See
+      # docs/Keystone_Bootstrap_Race_Report.md.
+      echo '[INFO] Attendo che Keystone risponda su :5000...';
+      KEYSTONE_UP=0;
+      for i in $$(seq 1 60); do
+        if (echo > /dev/tcp/127.0.0.1/5000) >/dev/null 2>&1; then
+          KEYSTONE_UP=1; echo \"[INFO] Keystone risponde dopo $${i} tentativi.\"; break;
+        fi;
+        sleep 2;
+      done;
+      if [ \"$$KEYSTONE_UP\" != \"1\" ]; then
+        echo '[ERROR] Keystone non risponde su :5000 dopo 120s. La creazione dei servizi fallirà.';
+      fi;
+
       echo '[INFO] Creazione dei servizi di Iotronic...';
       if ! su -s /bin/sh -c 'openstack service list --format value -c Type' keystone | grep -q '^iot$'; then
         su -s /bin/sh -c 'openstack project create --domain default --description \"Service Project\" service' keystone;
@@ -386,13 +403,30 @@ services:
         su -s /bin/sh -c 'openstack endpoint create --region RegionOne iot public http://iotronic-conductor:8812' keystone;
         su -s /bin/sh -c 'openstack endpoint create --region RegionOne iot internal http://iotronic-conductor:8812' keystone;
         su -s /bin/sh -c 'openstack endpoint create --region RegionOne iot admin http://iotronic-conductor:8812' keystone;
-        echo '[INFO] Iotronic services created.';
+        echo '[INFO] Comandi di creazione Iotronic eseguiti.';
       else
         echo '[INFO] Iotronic service already exists, skipping creation.';
       fi;
+
+      # The creates above are not error checked individually, so verify the
+      # end state rather than trusting that they worked. A silent empty
+      # catalog is the failure mode this whole block exists to prevent.
+      echo '[INFO] Verifica finale del catalogo...';
+      if su -s /bin/sh -c 'openstack service list --format value -c Type' keystone 2>/dev/null | grep -q '^iot$'; then
+        echo '[INFO] OK: il servizio iot e presente nel catalogo Keystone.';
+      else
+        echo '[ERROR] ============================================================';
+        echo '[ERROR] FALLITO: il servizio iot NON e nel catalogo Keystone.';
+        echo '[ERROR] Horizon non trovera la sezione IoT e il conductor non';
+        echo '[ERROR] riuscira ad autenticarsi. Controlla i messaggi';
+        echo '[ERROR] Connection refused verso http://keystone:5000/v3 qui sopra.';
+        echo '[ERROR] Riparazione manuale: docs/Keystone_Bootstrap_Race_Report.md';
+        echo '[ERROR] ============================================================';
+      fi;
+
       echo '[INFO] End of configuration!';
 
-      touch /tmp/keystone-setup-done;  
+      touch /tmp/keystone-setup-done;
 
       exec tail -f /dev/null"
 

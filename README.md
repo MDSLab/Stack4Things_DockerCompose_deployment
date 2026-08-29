@@ -21,11 +21,16 @@ This document describes how to deploy **Stack4Things IoTronic** services using *
    - [IoTronic WAgent](#iotronic-wagent)  
    - [IoTronic UI](#iotronic-ui)  
    - [Lightning-Rod](#lightning-rod)  
-5. [Configuration and Customization](#configuration-and-customization)  
-6. [Deployment Steps](#deployment-steps)  
-7. [Verifying the Deployment](#verifying-the-deployment)  
-8. [Troubleshooting](#troubleshooting)  
-9. [Further Reading](#further-reading)  
+5. [Digital Twin Layer (Eclipse Ditto)](#digital-twin-layer-eclipse-ditto)  
+   - [Ditto Services](#ditto-services)  
+   - [Integration Components](#integration-components)  
+   - [Running the Twin Layer](#running-the-twin-layer)  
+   - [Verifying the Twin Layer](#verifying-the-twin-layer)  
+6. [Configuration and Customization](#configuration-and-customization)  
+7. [Deployment Steps](#deployment-steps)  
+8. [Verifying the Deployment](#verifying-the-deployment)  
+9. [Troubleshooting](#troubleshooting)  
+10. [Further Reading](#further-reading)  
 
 ---
 
@@ -33,7 +38,7 @@ This document describes how to deploy **Stack4Things IoTronic** services using *
 
 **Stack4Things** is an IoT framework that integrates with **OpenStack** to provide a robust, cloud-oriented platform for managing IoT devices at scale. The framework uses **IoTronic** as the OpenStack-based service and provides optional components (e.g., database, message queue) that can be either hosted in Docker containers or integrated with existing OpenStack services.
 
-This guide focuses on a **Docker Compose**-based deployment, detailing how each container fits into the larger ecosystem. Once properly configured, this environment enables end-to-end IoTronic functionality—secure communications, device management, logging, and a user interface (UI)—all running within Docker.
+This guide focuses on a **Docker Compose**-based deployment, detailing how each container fits into the larger ecosystem. Once properly configured, this environment enables end-to-end IoTronic functionality, secure communications, device management, logging, and a user interface (UI) all running within Docker.
 
 ---
 
@@ -241,6 +246,135 @@ The virtualized board is now fully integrated with Stack4Things:
 
 ---
 
+# Digital Twin Layer (Eclipse Ditto)
+
+An optional layer that gives every registered board a **digital twin**: a queryable object holding the state the device last reported and the state an operator wants it to reach. Applications read and write the twin instead of addressing the device, so they work whether or not the device is currently reachable.
+
+It is delivered as a **second Compose file**, `docker-compose.ditto.yml`, which is layered on top of `docker-compose.yml`. No IoTronic image is rebuilt, no existing service definition is edited, and no existing volume is touched. If you do not want the twin layer, use `docker-compose.yml` alone exactly as before.
+
+**What it adds once running:**
+
+- A board registered in Horizon automatically gets a twin within about 30 seconds.
+- Telemetry published by a device on the WAMP bus lands in that twin.
+- A desired value written on the twin is delivered to the device over WAMP.
+- Twins are searchable across the whole fleet, with per-path access control and a full history of every change.
+
+Full design and rationale: `docs/Digital_Twin_Layer_Complete_Report.md`.
+
+## Ditto Services
+
+Eclipse Ditto is five microservices in one Apache Pekko cluster, plus MongoDB and an nginx reverse proxy. All are added unmodified from the upstream images.
+
+| Service | Role |
+|---|---|
+| `ditto-policies` | Persists policies and makes authorization decisions |
+| `ditto-things` | Persists things and features, enforces authorization on them |
+| `ditto-things-search` | Maintains the search index and executes RQL queries |
+| `ditto-connectivity` | Runs the AMQP connection to RabbitMQ and the payload mappings |
+| `ditto-gateway` | Terminates the HTTP and WebSocket APIs |
+| `ditto-mongodb` | Storage for all of the above |
+| `ditto-nginx` | Reverse proxy and HTTP basic authentication, the only published port |
+| `ditto-ui` | Explorer UI for browsing twins, policies and connections |
+
+- **Port**: only `ditto-nginx` is published, on **8090**. Port 8080 is already taken by `iotronic-wstun` on this host.
+- **Note**: every Java service carries the `ditto-cluster` network alias. Pekko uses it for seed node discovery, so removing it prevents the cluster from forming.
+- **Requirements**: Ditto documents a minimum of **2 CPU cores and 4 GB of RAM available to Docker**, in addition to the base stack.
+
+## Integration Components
+
+Three small containers connect Ditto to Stack4Things. Their source is in `scripts/`.
+
+### s4t-ditto-bridge
+
+- **Role**: The only component that speaks both protocols. Stack4Things uses WAMP over websockets, Ditto uses AMQP 0.9.1.
+- **Function**: Subscribes to `s4t.telemetry.<uuid>.report` on Crossbar and publishes to the `ditto.inbound` queue. In the other direction it consumes desired-state changes and publishes only the *difference* against the reported state on `s4t.command.<uuid>.apply`.
+- **Note**: sending the difference rather than the whole desired state makes command traffic self-terminating. Once the device complies and reports the new value, the difference is empty and nothing further is sent.
+
+### s4t-ditto-provisioner
+
+- **Role**: Keeps the set of twins matching the set of boards.
+- **Function**: Reads the `boards` table, lists existing twins, and creates whatever is missing. Runs every 30 seconds by default.
+- **Note**: it compares whole sets rather than reacting to events, because IoTronic emits no lifecycle notifications. A board registered while the twin layer was offline still receives its twin when the layer returns.
+
+### s4t-ditto-bootstrap
+
+- **Role**: One-shot setup, run once at startup and then exits.
+- **Function**: Declares the AMQP queues and exchanges, creates the Ditto access policy and the RabbitMQ connection, and verifies both.
+- **Note**: the bridge and the provisioner depend on it via `service_completed_successfully`. If bootstrap fails, neither starts. The stack refuses to run against an unconfigured Ditto rather than running and appearing healthy.
+
+### s4t_mock_board.py
+
+- **Role**: A simulated device for testing and demonstration, in `scripts/`.
+- **Function**: Publishes the same WAMP topics a real board would and applies any command it receives, so nothing downstream can tell the difference.
+
+## Running the Twin Layer
+
+Both files must be passed on every command. Defining a shell alias saves a lot of typing:
+
+```bash
+    alias dcs='docker compose -f docker-compose.yml -f docker-compose.ditto.yml'
+```
+
+Before the first run, append `.env.ditto.example` to your `.env` and fill in the two `CHANGE_ME` values:
+
+```bash
+    openssl rand -base64 24     # -> DITTO_DEVOPS_PASSWORD
+    openssl rand -base64 24     # -> DITTO_API_PASSWORD
+```
+
+The API password must also be written into `conf_ditto/nginx.htpasswd`, because nginx reads a file rather than an environment variable:
+
+```bash
+    openssl passwd -apr1        # paste DITTO_API_PASSWORD, then write the
+                                # result as  s4t:$apr1$...  into that file
+```
+
+Then bring everything up:
+
+```bash
+    dcs up -d
+    sleep 180
+    dcs ps
+```
+
+The JVMs have a 120 second health check start period and genuinely need most of it. Do not conclude anything before two minutes.
+
+**Three separate credentials** are in play, which is a common source of confusion:
+
+| Path | Credential |
+|---|---|
+| `/status`, `/health` | none |
+| `/api/2/things`, `/api/2/policies`, `/ws/2`, Explorer UI | `s4t` with `DITTO_API_PASSWORD` |
+| `/api/2/connections`, `/devops` | `devops` with `DITTO_DEVOPS_PASSWORD` |
+
+Ditto sees the basic-auth caller as the subject **`nginx:s4t`**. That is the string policies must grant; getting it wrong produces a 403 on twins with a cause several steps removed from the symptom.
+
+The Explorer UI is at `http://localhost:8090/ui/`. On first use, open the **Environments** tab and set the API URI to `http://localhost:8090`. It defaults to port 8080, which on this host is `iotronic-wstun`, not Ditto.
+
+## Verifying the Twin Layer
+
+```bash
+    ./scripts/verify_stage_c.sh
+```
+
+Thirteen checks, exiting non-zero if any fail. Two of them are the ones that matter: they write a message in at one end and look for it at the other, rather than reading a status field. A component reporting itself as healthy is not evidence that a message was delivered.
+
+For a narrated demonstration across two terminals:
+
+```bash
+    ./scripts/demo.sh board      # terminal 1, the simulated device
+    ./scripts/demo.sh            # terminal 2, the operator
+```
+
+If a twin is not updating, ask Ditto what it did with the message rather than guessing:
+
+```bash
+    curl -s -u devops:$DITTO_DEVOPS_PASSWORD \
+      http://localhost:8090/api/2/connections/s4t-rabbitmq/logs
+```
+
+---
+
 ## Configuration and Customization
 
 ### Environment Variables
@@ -250,12 +384,27 @@ Can be set:
 - In an external `.env` file  
 - As Docker secrets
 
+The Ditto overlay reads its own set from the same `.env`. Copy them from `.env.ditto.example`, which documents each one:
+
+| Variable | Purpose |
+|---|---|
+| `DITTO_VERSION` | Pinned image tag. Do not use `latest`, since a re-pull silently changes what you measured |
+| `DITTO_EXTERNAL_PORT` | Published port, 8090 by default |
+| `DITTO_API_PASSWORD` | Basic auth for twins and the Explorer UI, user `s4t` |
+| `DITTO_DEVOPS_PASSWORD` | Guards `/devops` and `/api/2/connections` |
+| `DITTO_MEM_*` | Per-service memory limits, roughly 3.0 GB in total by default |
+| `DITTO_JAVA_OPTS` | JVM options. `ditto-connectivity` has its own variant, deliberately without `ExitOnOutOfMemoryError`, because the AMQP client can throw it spuriously |
+| `S4T_AMQP_VHOST` | RabbitMQ virtual host, `/` by default |
+
 ### Volumes
 
 Used for:
 - Database data (`unime_iotronic_db_data`)  
 - SSL certs (`iotronic_ssl`)  
-- Logs (`iotronic_logs`, `iotronic-ui_logs`)
+- Logs (`iotronic_logs`, `iotronic-ui_logs`)  
+- Twin storage (`ditto_mongodb_data`), only when the Ditto overlay is used
+
+> **Note**: `unime_iotronic_db_data` and `rabbitmq_data` hold production state. They are ordinary named volumes, so Docker will happily recreate them empty if they are missing, and `docker compose up` reports that as `Created` without warning. See the cleanup note under Troubleshooting.
 
 ### Networking
 
@@ -264,6 +413,8 @@ Services are placed on a user-defined Docker network (e.g., `s4t`) and can reach
 ### Ports
 
 Check `ports:` entries and adapt to your host as needed (e.g., `8080:8080`, `5000:5000`).
+
+With the Ditto overlay, **8090** is published for `ditto-nginx`. Ditto's own MongoDB (27017) and the internal gateway port (8081) are deliberately **not** published.
 
 ---
 
@@ -281,6 +432,10 @@ Check `ports:` entries and adapt to your host as needed (e.g., `8080:8080`, `500
 ### 3. Launch the Deployment
 ```bash
     docker-compose up -d
+```
+To include the digital twin layer, pass both files:
+```bash
+    docker compose -f docker-compose.yml -f docker-compose.ditto.yml up -d
 ```
 - Creates network  
 - Starts containers in correct order  
@@ -312,6 +467,7 @@ Press `Ctrl+C` to stop watching logs (containers stay running).
 - **Conductor**: Should respond on port 8812.  
 - **UI**: Open your browser to:  
   `http://<your_docker_host_or_ip>/`
+- **Ditto** (if the overlay is running): `curl -s http://localhost:8090/status` should report overall `UP`, and `./scripts/verify_stage_c.sh` should report 13 passes.
 
 ## Stopping and Removing the Deployment
 
@@ -330,6 +486,9 @@ This command halts and removes all containers defined in the `docker-compose.yml
 Appending the `-v` flag will also delete any named volumes (e.g., for the database, logs, or certificates), resulting in the loss of all persisted data.
 
 ⚠️ **Warning**: This operation is irreversible. Ensure that all critical data has been properly backed up before proceeding with the `-v` option.
+
+`-v` is not the only way to lose these volumes. See the cleanup note under
+Troubleshooting: prune commands remove them too, with no prompt and no `-v`.
 ---
 
 ## Troubleshooting
@@ -360,11 +519,45 @@ Appending the `-v` flag will also delete any named volumes (e.g., for the databa
 ```bash
     docker-compose logs -f <service_name>
 ```
+### Ditto twin layer
+
+- **A container is `unhealthy`**: the health checks here mean *connected and working*, not merely running. Read the logs, do not restart blindly: `dcs logs --tail 40 <service>`.
+- **`ditto-policies` or `ditto-things` restarting**: usually the Pekko cluster failing to form. Confirm every Java service still carries the `ditto-cluster` network alias.
+- **401 on `/api` with a password you believe is right**: `conf_ditto/nginx.htpasswd` and `DITTO_API_PASSWORD` have drifted apart. Regenerate both together with `openssl passwd -apr1`.
+- **Explorer UI shows "unauthorized" with no detail**: the API URI in its Environments tab is still the default 8080, which is `iotronic-wstun`. Set it to 8090.
+- **Twin not updating**: do not guess. Ask Ditto what it did with the message: `curl -s -u devops:$DITTO_DEVOPS_PASSWORD http://localhost:8090/api/2/connections/s4t-rabbitmq/logs`.
+- **`s4t-ditto-bridge` did not start**: the bootstrap did not exit 0. Nothing downstream runs until it does.
+
 ### Cleanup (use with caution)
+
+> ### ⚠️ Read this before running any prune
+>
+> **`docker system prune` and `docker volume prune` can delete the production
+> volumes**, and on this deployment they have. A prune skips any volume attached
+> to a container, including a stopped one, but once containers have been removed
+> (for example by `docker compose down`) the volumes are unreferenced and become
+> eligible for deletion.
+>
+> The failure is silent. The next `docker compose up` recreates the missing
+> volumes empty and reports it as `Created`, so the stack comes up looking
+> perfectly healthy with an empty database.
+>
+> Take a dump **before** any cleanup, and prefer removing specific objects over
+> pruning:
+>
+> ```bash
+>     docker exec iotronic-db mariadb-dump -uroot -p"$MYSQL_ROOT_PASSWORD" \
+>       --databases iotronic keystone > backup_$(date +%Y%m%d_%H%M%S).sql
+> ```
+>
+> A post-mortem of one such incident is in `docs/Volume_Loss_Recovery_23_Aug_2026.md`.
+
+If you have read the above and still want to reclaim space, prune images only
+and leave volumes alone:
+
 ```bash
-    docker system prune -f
+    docker image prune -f
 ```
-> ⚠️ This will remove unused containers, images, networks, and volumes.
 
 ---
 
@@ -377,6 +570,15 @@ Appending the `-v` flag will also delete any named volumes (e.g., for the databa
 - [Docker Documentation](https://docs.docker.com)
 - [Docker Compose Docs](https://docs.docker.com/compose)
 - [OpenStack Documentation](https://docs.openstack.org)
+
+### Digital twin layer
+
+- [Eclipse Ditto Documentation](https://eclipse.dev/ditto/)
+- [Ditto AMQP 0.9.1 binding](https://eclipse.dev/ditto/connectivity-protocol-bindings-amqp091.html)
+- [RFC 7396, JSON Merge Patch](https://tools.ietf.org/html/rfc7396)
+- `docs/Digital_Twin_Layer_Complete_Report.md`, the consolidated evaluation, design, implementation and verification report
+
+- `scripts/verify_stage_c.sh`, the executable definition of done
 
 ---
 

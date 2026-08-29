@@ -1,0 +1,430 @@
+# Eclipse Ditto, the digital twin layer for Stack4Things.
+#
+# This is an OVERLAY. It is never used alone and it never edits
+# docker-compose.yml. Bring the whole system up with:
+#
+#   docker compose -f docker-compose.yml -f docker-compose.ditto.yml up -d
+#
+# Differences from the upstream eclipse-ditto compose file, all deliberate:
+#
+#   * services are prefixed ditto-* because they share the s4t network with
+#     Stack4Things and names like "gateway" and "nginx" should not be squatted
+#   * every Java service keeps the ditto-cluster network alias, which is how
+#     Pekko discovers its seed nodes. Removing it breaks cluster formation.
+#   * the Java services depend on each other with service_started, NEVER
+#     service_healthy. Pekko bootstrap needs 2 contact points before it forms
+#     a cluster, and a node is not healthy until the cluster exists. Waiting
+#     for a peer to be healthy is therefore a deadlock: policies waits for the
+#     cluster, the cluster waits for a second member. They must start together.
+#   * mongodb gets a NAMED VOLUME. Upstream has none, so compose down destroys
+#     every twin. That is fine for evaluation and not for a factory.
+#   * mongodb and the gateway are NOT published to the host. Only nginx is.
+#     Upstream publishes 27017 and 8081, which is unnecessary exposure.
+#   * credentials come from .env, never from the file
+#   * log rotation is configured, an idle connection can otherwise fill a disk
+#   * memory limits are variables so the whole stack can be tuned per host
+#   * swagger-ui is dropped, and the /apidoc location removed from nginx.conf
+#     accordingly, because nginx resolves literal proxy_pass upstreams at
+#     startup and would refuse to start otherwise
+
+services:
+  # ---------------------------------------------------------------- storage
+  ditto-mongodb:
+    image: docker.io/mongo:7.0
+    container_name: ditto-mongodb
+    restart: unless-stopped
+    command: mongod --storageEngine wiredTiger --noscripting
+    user: mongodb
+    environment:
+      TZ: ${TZ:-Europe/Rome}
+    volumes:
+      - ditto_mongodb_data:/data/db
+    networks:
+      s4t:
+        aliases: [ditto-mongodb]
+    healthcheck:
+      test:
+        ["CMD", "mongosh", "--quiet", "--eval", "db.adminCommand('ping').ok"]
+      interval: 15s
+      timeout: 10s
+      retries: 6
+      start_period: 40s
+    deploy:
+      resources:
+        limits:
+          memory: ${DITTO_MEM_MONGO:-512m}
+    logging:
+      driver: json-file
+      options: { max-size: "50m", max-file: "3" }
+
+  # ------------------------------------------------------------ ditto core
+  ditto-policies:
+    image: docker.io/eclipse/ditto-policies:${DITTO_VERSION:-3.9.6}
+    container_name: ditto-policies
+    restart: unless-stopped
+    depends_on:
+      ditto-mongodb: { condition: service_healthy }
+    environment:
+      - TZ=${TZ:-Europe/Rome}
+      - BIND_HOSTNAME=0.0.0.0
+      - MONGO_DB_HOSTNAME=ditto-mongodb
+      - JAVA_TOOL_OPTIONS=${DITTO_JAVA_OPTS}
+    networks:
+      s4t:
+        aliases: [ditto-cluster, ditto-policies]
+    healthcheck:
+      test: ["CMD-SHELL", "curl --fail http://localhost:7626/alive || exit 1"]
+      interval: 30s
+      timeout: 15s
+      retries: 4
+      start_period: 120s
+    deploy:
+      resources:
+        limits:
+          memory: ${DITTO_MEM_POLICIES:-512m}
+    logging:
+      driver: json-file
+      options: { max-size: "50m", max-file: "3" }
+
+  ditto-things:
+    image: docker.io/eclipse/ditto-things:${DITTO_VERSION:-3.9.6}
+    container_name: ditto-things
+    restart: unless-stopped
+    depends_on:
+      ditto-mongodb: { condition: service_healthy }
+      ditto-policies: { condition: service_started }
+    environment:
+      - TZ=${TZ:-Europe/Rome}
+      - BIND_HOSTNAME=0.0.0.0
+      - MONGO_DB_HOSTNAME=ditto-mongodb
+      - JAVA_TOOL_OPTIONS=${DITTO_JAVA_OPTS}
+    networks:
+      s4t:
+        aliases: [ditto-cluster, ditto-things]
+    healthcheck:
+      test: ["CMD-SHELL", "curl --fail http://localhost:7626/alive || exit 1"]
+      interval: 30s
+      timeout: 15s
+      retries: 4
+      start_period: 120s
+    deploy:
+      resources:
+        limits:
+          memory: ${DITTO_MEM_THINGS:-512m}
+    logging:
+      driver: json-file
+      options: { max-size: "50m", max-file: "3" }
+
+  ditto-things-search:
+    image: docker.io/eclipse/ditto-things-search:${DITTO_VERSION:-3.9.6}
+    container_name: ditto-things-search
+    restart: unless-stopped
+    depends_on:
+      ditto-mongodb: { condition: service_healthy }
+      ditto-policies: { condition: service_started }
+    environment:
+      - TZ=${TZ:-Europe/Rome}
+      - BIND_HOSTNAME=0.0.0.0
+      - MONGO_DB_HOSTNAME=ditto-mongodb
+      - JAVA_TOOL_OPTIONS=${DITTO_JAVA_OPTS}
+    networks:
+      s4t:
+        aliases: [ditto-cluster, ditto-things-search]
+    healthcheck:
+      test: ["CMD-SHELL", "curl --fail http://localhost:7626/alive || exit 1"]
+      interval: 30s
+      timeout: 15s
+      retries: 4
+      start_period: 120s
+    deploy:
+      resources:
+        limits:
+          memory: ${DITTO_MEM_SEARCH:-512m}
+    logging:
+      driver: json-file
+      options: { max-size: "50m", max-file: "3" }
+
+  ditto-connectivity:
+    image: docker.io/eclipse/ditto-connectivity:${DITTO_VERSION:-3.9.6}
+    container_name: ditto-connectivity
+    restart: unless-stopped
+    depends_on:
+      ditto-mongodb: { condition: service_healthy }
+      ditto-policies: { condition: service_started }
+      rabbitmq: { condition: service_healthy }
+    environment:
+      - TZ=${TZ:-Europe/Rome}
+      - BIND_HOSTNAME=0.0.0.0
+      - MONGO_DB_HOSTNAME=ditto-mongodb
+      # NOTE upstream comment: the amqp client can throw OOM and cause a restart
+      # loop, so ExitOnOutOfMemoryError is deliberately NOT set for this one.
+      - JAVA_TOOL_OPTIONS=${DITTO_JAVA_OPTS_CONNECTIVITY}
+    networks:
+      s4t:
+        aliases: [ditto-cluster, ditto-connectivity]
+    healthcheck:
+      test: ["CMD-SHELL", "curl --fail http://localhost:7626/alive || exit 1"]
+      interval: 30s
+      timeout: 15s
+      retries: 4
+      start_period: 120s
+    deploy:
+      resources:
+        limits:
+          memory: ${DITTO_MEM_CONNECTIVITY:-768m}
+    logging:
+      driver: json-file
+      options: { max-size: "50m", max-file: "3" }
+
+  ditto-gateway:
+    image: docker.io/eclipse/ditto-gateway:${DITTO_VERSION:-3.9.6}
+    container_name: ditto-gateway
+    restart: unless-stopped
+    depends_on:
+      ditto-policies: { condition: service_started }
+      ditto-things: { condition: service_started }
+    environment:
+      - TZ=${TZ:-Europe/Rome}
+      - BIND_HOSTNAME=0.0.0.0
+      # nginx authenticates and forwards the identity as nginx:<user>
+      - ENABLE_PRE_AUTHENTICATION=true
+      - DEVOPS_PASSWORD=${DITTO_DEVOPS_PASSWORD:?set DITTO_DEVOPS_PASSWORD in .env}
+      - JAVA_TOOL_OPTIONS=${DITTO_JAVA_OPTS}
+    networks:
+      s4t:
+        aliases: [ditto-cluster, ditto-gateway]
+    healthcheck:
+      test: ["CMD-SHELL", "curl --fail http://localhost:7626/alive || exit 1"]
+      interval: 30s
+      timeout: 15s
+      retries: 4
+      start_period: 120s
+    deploy:
+      resources:
+        limits:
+          memory: ${DITTO_MEM_GATEWAY:-512m}
+    logging:
+      driver: json-file
+      options: { max-size: "50m", max-file: "3" }
+
+  ditto-ui:
+    image: docker.io/eclipse/ditto-ui:${DITTO_VERSION:-3.9.6}
+    container_name: ditto-ui
+    restart: unless-stopped
+    networks:
+      s4t:
+        aliases: [ditto-ui]
+    deploy:
+      resources:
+        limits:
+          memory: ${DITTO_MEM_UI:-64m}
+    logging:
+      driver: json-file
+      options: { max-size: "10m", max-file: "2" }
+
+  ditto-nginx:
+    image: docker.io/nginx:1.27-alpine
+    container_name: ditto-nginx
+    restart: unless-stopped
+    depends_on:
+      ditto-gateway: { condition: service_healthy }
+      ditto-ui: { condition: service_started }
+    volumes:
+      - ./conf_ditto/nginx.conf:/etc/nginx/nginx.conf:ro
+      - ./conf_ditto/nginx.htpasswd:/etc/nginx/nginx.htpasswd:ro
+      - ./conf_ditto/nginx-cors.conf:/etc/nginx/nginx-cors.conf:ro
+      - ./conf_ditto/index.html:/etc/nginx/html/index.html:ro
+    ports:
+      # 8080 is iotronic-wstun on this host, hence 8090
+      - "${DITTO_EXTERNAL_PORT:-8090}:80"
+    networks:
+      s4t:
+        aliases: [ditto-nginx]
+    healthcheck:
+      # Tests that nginx itself is serving. Do NOT point this at /status: that
+      # proxies to the gateway's /overall/status, which requires Ditto's status
+      # credentials and returns 401, so wget exits non-zero and nginx is
+      # wrongly marked unhealthy. The gateway's own health is already covered
+      # by the ditto-gateway healthcheck.
+      test: ["CMD-SHELL", "wget -q -O /dev/null http://127.0.0.1/ || exit 1"]
+      interval: 15s
+      timeout: 10s
+      retries: 5
+      start_period: 60s
+    deploy:
+      resources:
+        limits:
+          memory: ${DITTO_MEM_NGINX:-64m}
+    logging:
+      driver: json-file
+      options: { max-size: "10m", max-file: "2" }
+
+  s4t-ditto-bootstrap:
+    build:
+      context: .
+      dockerfile: docker/ditto-tools/Dockerfile
+    image: s4t/ditto-tools:local
+    container_name: s4t-ditto-bootstrap
+    # One shot. It must run to completion and exit, not restart.
+    restart: "no"
+    command: ["s4t_ditto_bootstrap.py"]
+    networks:
+      s4t:
+        aliases: [s4t-ditto-bootstrap]
+    depends_on:
+      ditto-gateway:
+        condition: service_healthy
+      ditto-nginx:
+        condition: service_healthy
+      # It creates a CONNECTION, which the gateway routes to the connectivity
+      # shard. Without this, `up -d s4t-ditto-bridge` starts the bootstrap
+      # with no connectivity service running and the call hangs until timeout.
+      ditto-connectivity:
+        condition: service_healthy
+      rabbitmq:
+        condition: service_healthy
+    environment:
+      # talks to Ditto through nginx on the internal network, not localhost:8090
+      DITTO_URL: "http://ditto-nginx:80"
+      DITTO_API_USER: "${DITTO_API_USER:-s4t}"
+      DITTO_API_PASSWORD: "${DITTO_API_PASSWORD:?set DITTO_API_PASSWORD in .env}"
+      DITTO_DEVOPS_USER: "${DITTO_DEVOPS_USER:-devops}"
+      DITTO_DEVOPS_PASSWORD: "${DITTO_DEVOPS_PASSWORD:?set DITTO_DEVOPS_PASSWORD in .env}"
+      DITTO_NAMESPACE: "${DITTO_NAMESPACE:-s4t}"
+      DITTO_POLICY: "${DITTO_POLICY:-s4t:fleet-unime-lab}"
+      DITTO_CONNECTION_ID: "${DITTO_CONNECTION_ID:-s4t-rabbitmq}"
+      S4T_AMQP_HOST: "${S4T_AMQP_HOST:-rabbitmq}"
+      S4T_AMQP_PORT: "${S4T_AMQP_PORT:-5672}"
+      S4T_AMQP_USER: "${S4T_AMQP_USER:-openstack}"
+      S4T_AMQP_PASS: "${S4T_AMQP_PASS:-unime}"
+      S4T_AMQP_VHOST: "${S4T_AMQP_VHOST:-/}"
+      DITTO_INBOUND_QUEUE: "${DITTO_INBOUND_QUEUE:-ditto.inbound}"
+      DITTO_OUTBOUND_EXCHANGE: "${DITTO_OUTBOUND_EXCHANGE:-ditto}"
+      DITTO_OUTBOUND_KEY: "${DITTO_OUTBOUND_KEY:-outbound}"
+      DITTO_OUTBOUND_QUEUE: "${DITTO_OUTBOUND_QUEUE:-ditto.commands}"
+      DITTO_EVENTS_KEY: "${DITTO_EVENTS_KEY:-twin.events}"
+      DITTO_EVENTS_QUEUE: "${DITTO_EVENTS_QUEUE:-ditto.twin.events}"
+    logging:
+      driver: json-file
+      options: { max-size: "10m", max-file: "2" }
+
+  # --------------------------------------------------------------- stage C
+  # crossbar has no healthcheck in docker-compose.yml, so nothing could wait
+  # on it properly. This override adds one WITHOUT editing that file, using
+  # the same socket probe iotronic-wagent already uses in this deployment.
+  crossbar:
+    healthcheck:
+      test: ["CMD", "python3", "-c",
+             "import socket; socket.create_connection(('127.0.0.1', 8181), timeout=3)"]
+      interval: 10s
+      timeout: 5s
+      retries: 6
+      start_period: 30s
+
+  s4t-ditto-bridge:
+    build:
+      context: .
+      dockerfile: docker/ditto-tools/Dockerfile
+    image: s4t/ditto-tools:local
+    container_name: s4t-ditto-bridge
+    restart: unless-stopped
+    command: ["s4t_ditto_bridge.py", "-v"]
+    networks:
+      s4t:
+        aliases: [s4t-ditto-bridge]
+    depends_on:
+      crossbar:
+        condition: service_healthy
+      rabbitmq:
+        condition: service_healthy
+      s4t-ditto-bootstrap:
+        condition: service_completed_successfully
+    environment:
+      S4T_CROSSBAR_HOST: "${S4T_CROSSBAR_HOST:-crossbar}"
+      S4T_CROSSBAR_PORT: "${S4T_CROSSBAR_PORT:-8181}"
+      S4T_WAMP_REALM: "${S4T_WAMP_REALM:-s4t}"
+      S4T_AMQP_HOST: "${S4T_AMQP_HOST:-rabbitmq}"
+      S4T_AMQP_PORT: "${S4T_AMQP_PORT:-5672}"
+      S4T_AMQP_USER: "${S4T_AMQP_USER:-openstack}"
+      S4T_AMQP_PASS: "${S4T_AMQP_PASS:-unime}"
+      S4T_AMQP_VHOST: "${S4T_AMQP_VHOST:-/}"
+      DITTO_INBOUND_QUEUE: "${DITTO_INBOUND_QUEUE:-ditto.inbound}"
+      DITTO_OUTBOUND_EXCHANGE: "${DITTO_OUTBOUND_EXCHANGE:-ditto}"
+      DITTO_OUTBOUND_KEY: "${DITTO_OUTBOUND_KEY:-outbound}"
+      DITTO_OUTBOUND_QUEUE: "${DITTO_OUTBOUND_QUEUE:-ditto.commands}"
+      HEARTBEAT_FILE: "/tmp/bridge-alive"
+    healthcheck:
+      # stale file means the WAMP session or the AMQP channel is down, even
+      # though the process is still running. That distinction is the point.
+      test: ["CMD-SHELL",
+             "test -f /tmp/bridge-alive && [ $$(( $$(date +%s) - $$(stat -c %Y /tmp/bridge-alive) )) -lt 20 ]"]
+      interval: 10s
+      timeout: 5s
+      retries: 3
+      start_period: 30s
+    deploy:
+      resources:
+        limits:
+          memory: ${MEM_BRIDGE:-192m}
+    logging:
+      driver: json-file
+      options: { max-size: "20m", max-file: "3" }
+
+  s4t-ditto-provisioner:
+    build:
+      context: .
+      dockerfile: docker/ditto-tools/Dockerfile
+    image: s4t/ditto-tools:local
+    container_name: s4t-ditto-provisioner
+    restart: unless-stopped
+    # No --create-policy: the bootstrap owns the policy, and this service is
+    # gated on it having completed, so the policy is guaranteed to exist.
+    # --repair-policies fixes any twin implicitly created by a telemetry
+    # message that arrived before its board was provisioned.
+    command: ["s4t_ditto_provisioner.py", "--watch",
+              "--interval", "${PROVISIONER_INTERVAL:-30}",
+              "--repair-policies"]
+    networks:
+      s4t:
+        aliases: [s4t-ditto-provisioner]
+    depends_on:
+      iotronic-db:
+        condition: service_healthy
+      # It reconciles by SEARCHING for existing twins, so things-search has to
+      # be up, not just things.
+      ditto-things-search:
+        condition: service_healthy
+      s4t-ditto-bootstrap:
+        condition: service_completed_successfully
+    environment:
+      DITTO_URL: "http://ditto-nginx:80"
+      DITTO_USER: "${DITTO_API_USER:-s4t}"
+      DITTO_PASS: "${DITTO_API_PASSWORD:?set DITTO_API_PASSWORD in .env}"
+      DITTO_NAMESPACE: "${DITTO_NAMESPACE:-s4t}"
+      DITTO_POLICY: "${DITTO_POLICY:-s4t:fleet-unime-lab}"
+      S4T_DB_HOST: "${S4T_DB_HOST:-iotronic-db}"
+      S4T_DB_PORT: "${S4T_DB_PORT:-3306}"
+      S4T_DB_USER: "${S4T_DB_USER:-iotronic}"
+      S4T_DB_PASS: "${S4T_DB_PASS:-unime}"
+      S4T_DB_NAME: "${S4T_DB_NAME:-iotronic}"
+      HEARTBEAT_FILE: "/tmp/provisioner-alive"
+    healthcheck:
+      # touched only after a pass with zero failures, so a provisioner that
+      # cannot reach MariaDB or Ditto goes unhealthy rather than looping quietly
+      test: ["CMD-SHELL",
+             "test -f /tmp/provisioner-alive && [ $$(( $$(date +%s) - $$(stat -c %Y /tmp/provisioner-alive) )) -lt 120 ]"]
+      interval: 30s
+      timeout: 5s
+      retries: 3
+      start_period: 60s
+    deploy:
+      resources:
+        limits:
+          memory: ${MEM_PROVISIONER:-192m}
+    logging:
+      driver: json-file
+      options: { max-size: "20m", max-file: "3" }
+
+volumes:
+  ditto_mongodb_data:
+    name: ditto_mongodb_data

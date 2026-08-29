@@ -1,0 +1,68 @@
+<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 920 400" width="920" height="400" font-family="Helvetica,Arial,sans-serif">
+<rect width="920" height="400" fill="#fff"/>
+<text x="20" y="26" font-size="15" font-weight="bold">Figure 2. How a measurement goes up and how an instruction comes down</text>
+<text x="22" y="62" font-size="13" text-anchor="start" font-weight="bold">UP: the device reports what is true</text>
+<rect x="22" y="75" width="126" height="50" fill="#fff" stroke="#000" stroke-width="1.6"/>
+<text x="85.0" y="96.5" font-size="12" text-anchor="middle" font-weight="bold">Device</text>
+<text x="85.0" y="111.5" font-size="12" text-anchor="middle" font-weight="normal">publishes</text>
+<rect x="172" y="75" width="126" height="50" fill="#fff" stroke="#000" stroke-width="1.6"/>
+<text x="235.0" y="96.5" font-size="12" text-anchor="middle" font-weight="bold">crossbar</text>
+<text x="235.0" y="111.5" font-size="12" text-anchor="middle" font-weight="normal">WAMP topic</text>
+<rect x="322" y="75" width="126" height="50" fill="#fff" stroke="#000" stroke-width="1.6"/>
+<text x="385.0" y="96.5" font-size="12" text-anchor="middle" font-weight="bold">bridge</text>
+<text x="385.0" y="111.5" font-size="12" text-anchor="middle" font-weight="normal">to JSON</text>
+<rect x="472" y="75" width="126" height="50" fill="#fff" stroke="#000" stroke-width="1.6"/>
+<text x="535.0" y="96.5" font-size="12" text-anchor="middle" font-weight="bold">RabbitMQ</text>
+<text x="535.0" y="111.5" font-size="12" text-anchor="middle" font-weight="normal">ditto.inbound</text>
+<rect x="622" y="75" width="126" height="50" fill="#fff" stroke="#000" stroke-width="1.6"/>
+<text x="685.0" y="96.5" font-size="12" text-anchor="middle" font-weight="bold">Ditto</text>
+<text x="685.0" y="111.5" font-size="12" text-anchor="middle" font-weight="normal">JavaScript map</text>
+<rect x="772" y="75" width="126" height="50" fill="#fff" stroke="#000" stroke-width="1.6"/>
+<text x="835.0" y="96.5" font-size="12" text-anchor="middle" font-weight="bold">Twin</text>
+<text x="835.0" y="111.5" font-size="12" text-anchor="middle" font-weight="normal">properties</text>
+<line x1="149.0" y1="100.0" x2="161.0" y2="100.0" stroke="#000" stroke-width="1.6"/>
+<polygon points="170.0,100.0 161.0,104.2 161.0,95.8" fill="#000"/>
+<line x1="299.0" y1="100.0" x2="311.0" y2="100.0" stroke="#000" stroke-width="1.6"/>
+<polygon points="320.0,100.0 311.0,104.2 311.0,95.8" fill="#000"/>
+<line x1="449.0" y1="100.0" x2="461.0" y2="100.0" stroke="#000" stroke-width="1.6"/>
+<polygon points="470.0,100.0 461.0,104.2 461.0,95.8" fill="#000"/>
+<line x1="599.0" y1="100.0" x2="611.0" y2="100.0" stroke="#000" stroke-width="1.6"/>
+<polygon points="620.0,100.0 611.0,104.2 611.0,95.8" fill="#000"/>
+<line x1="749.0" y1="100.0" x2="761.0" y2="100.0" stroke="#000" stroke-width="1.6"/>
+<polygon points="770.0,100.0 761.0,104.2 761.0,95.8" fill="#000"/>
+<text x="22" y="148" font-size="11" text-anchor="start">The twin is updated by a merge, so reporting one value never erases another.</text>
+<text x="22" y="205" font-size="13" text-anchor="start" font-weight="bold">DOWN: the operator states what should be true</text>
+<rect x="22" y="218" width="126" height="50" fill="#fff" stroke="#000" stroke-width="1.6"/>
+<text x="85.0" y="239.7" font-size="11" text-anchor="middle" font-weight="bold">Twin</text>
+<text x="85.0" y="253.7" font-size="11" text-anchor="middle" font-weight="normal">desiredProperties</text>
+<rect x="172" y="218" width="126" height="50" fill="#fff" stroke="#000" stroke-width="1.6"/>
+<text x="235.0" y="239.7" font-size="11" text-anchor="middle" font-weight="bold">Ditto</text>
+<text x="235.0" y="253.7" font-size="11" text-anchor="middle" font-weight="normal">filter and enrich</text>
+<rect x="322" y="218" width="126" height="50" fill="#fff" stroke="#000" stroke-width="1.6"/>
+<text x="385.0" y="239.7" font-size="11" text-anchor="middle" font-weight="bold">RabbitMQ</text>
+<text x="385.0" y="253.7" font-size="11" text-anchor="middle" font-weight="normal">ditto.commands</text>
+<rect x="472" y="218" width="126" height="50" fill="#fff" stroke="#000" stroke-width="1.6"/>
+<text x="535.0" y="239.7" font-size="11" text-anchor="middle" font-weight="bold">bridge</text>
+<text x="535.0" y="253.7" font-size="11" text-anchor="middle" font-weight="normal">computes delta</text>
+<rect x="622" y="218" width="126" height="50" fill="#fff" stroke="#000" stroke-width="1.6"/>
+<text x="685.0" y="239.7" font-size="11" text-anchor="middle" font-weight="bold">crossbar</text>
+<text x="685.0" y="253.7" font-size="11" text-anchor="middle" font-weight="normal">WAMP topic</text>
+<rect x="772" y="218" width="126" height="50" fill="#fff" stroke="#000" stroke-width="1.6"/>
+<text x="835.0" y="239.7" font-size="11" text-anchor="middle" font-weight="bold">Device</text>
+<text x="835.0" y="253.7" font-size="11" text-anchor="middle" font-weight="normal">applies it</text>
+<line x1="149.0" y1="243.0" x2="161.0" y2="243.0" stroke="#000" stroke-width="1.6"/>
+<polygon points="170.0,243.0 161.0,247.2 161.0,238.8" fill="#000"/>
+<line x1="299.0" y1="243.0" x2="311.0" y2="243.0" stroke="#000" stroke-width="1.6"/>
+<polygon points="320.0,243.0 311.0,247.2 311.0,238.8" fill="#000"/>
+<line x1="449.0" y1="243.0" x2="461.0" y2="243.0" stroke="#000" stroke-width="1.6"/>
+<polygon points="470.0,243.0 461.0,247.2 461.0,238.8" fill="#000"/>
+<line x1="599.0" y1="243.0" x2="611.0" y2="243.0" stroke="#000" stroke-width="1.6"/>
+<polygon points="620.0,243.0 611.0,247.2 611.0,238.8" fill="#000"/>
+<line x1="749.0" y1="243.0" x2="761.0" y2="243.0" stroke="#000" stroke-width="1.6"/>
+<polygon points="770.0,243.0 761.0,247.2 761.0,238.8" fill="#000"/>
+<text x="22" y="291" font-size="11" text-anchor="start">The operator never addresses the device. The twin is the interface.</text>
+<rect x="22" y="312" width="876" height="68" fill="#ededed" stroke="#000" stroke-width="1.6"/>
+<text x="40" y="335" font-size="12" text-anchor="start" font-weight="bold">Why the command traffic stops on its own</text>
+<text x="40" y="355" font-size="11" text-anchor="start">The bridge sends only the difference between desired and reported. Once the device complies and reports</text>
+<text x="40" y="371" font-size="11" text-anchor="start">the new value, the difference is empty, so nothing more is sent. No acknowledgement protocol is needed.</text>
+</svg>

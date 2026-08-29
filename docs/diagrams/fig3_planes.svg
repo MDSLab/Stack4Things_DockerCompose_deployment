@@ -1,0 +1,45 @@
+<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 920 400" width="920" height="400" font-family="Helvetica,Arial,sans-serif">
+<rect width="920" height="400" fill="#fff"/>
+<text x="20" y="26" font-size="15" font-weight="bold">Figure 3. Two different clocks: identity is polled, state is pushed</text>
+<rect x="20" y="45" width="880" height="148" fill="none" stroke="#000" stroke-width="1" stroke-dasharray="5 4"/>
+<text x="28" y="63" font-size="12" font-weight="bold">CONTROL PLANE: which devices exist</text>
+<rect x="45" y="88" width="185" height="64" fill="#fff" stroke="#000" stroke-width="1.6"/>
+<text x="137.5" y="109.0" font-size="12" text-anchor="middle" font-weight="bold">iotronic-db</text>
+<text x="137.5" y="124.0" font-size="12" text-anchor="middle" font-weight="normal">boards table</text>
+<text x="137.5" y="139.0" font-size="12" text-anchor="middle" font-weight="normal">the authority</text>
+<rect x="315" y="88" width="215" height="64" fill="#fff" stroke="#000" stroke-width="1.6"/>
+<text x="422.5" y="109.0" font-size="12" text-anchor="middle" font-weight="bold">s4t-ditto-provisioner</text>
+<text x="422.5" y="124.0" font-size="12" text-anchor="middle" font-weight="normal">compares every 30s</text>
+<text x="422.5" y="139.0" font-size="12" text-anchor="middle" font-weight="normal">creates what is missing</text>
+<rect x="620" y="88" width="185" height="64" fill="#fff" stroke="#000" stroke-width="1.6"/>
+<text x="712.5" y="116.5" font-size="12" text-anchor="middle" font-weight="bold">Twin identity</text>
+<text x="712.5" y="131.5" font-size="12" text-anchor="middle" font-weight="normal">policy and attributes</text>
+<line x1="230.0" y1="120.0" x2="306.0" y2="120.0" stroke="#000" stroke-width="1.6"/>
+<polygon points="315.0,120.0 306.0,124.2 306.0,115.8" fill="#000"/>
+<text x="272.5" y="113.0" font-size="11" text-anchor="middle">read all</text>
+<line x1="530.0" y1="120.0" x2="611.0" y2="120.0" stroke="#000" stroke-width="1.6"/>
+<polygon points="620.0,120.0 611.0,124.2 611.0,115.8" fill="#000"/>
+<text x="575.0" y="113.0" font-size="11" text-anchor="middle">write</text>
+<text x="45" y="178" font-size="11" text-anchor="start">Latency about 15 seconds on average. Slow is fine, because a device name rarely changes.</text>
+<rect x="20" y="212" width="880" height="120" fill="none" stroke="#000" stroke-width="1" stroke-dasharray="5 4"/>
+<text x="28" y="230" font-size="12" font-weight="bold">DATA PLANE: what those devices are doing</text>
+<rect x="45" y="250" width="185" height="54" fill="#fff" stroke="#000" stroke-width="1.6"/>
+<text x="137.5" y="273.5" font-size="12" text-anchor="middle" font-weight="bold">Device</text>
+<text x="137.5" y="288.5" font-size="12" text-anchor="middle" font-weight="normal">sensor reading</text>
+<rect x="315" y="250" width="215" height="54" fill="#fff" stroke="#000" stroke-width="1.6"/>
+<text x="422.5" y="273.5" font-size="12" text-anchor="middle" font-weight="bold">bridge and RabbitMQ</text>
+<text x="422.5" y="288.5" font-size="12" text-anchor="middle" font-weight="normal">pushed, never polled</text>
+<rect x="620" y="250" width="185" height="54" fill="#fff" stroke="#000" stroke-width="1.6"/>
+<text x="712.5" y="273.5" font-size="12" text-anchor="middle" font-weight="bold">Twin state</text>
+<text x="712.5" y="288.5" font-size="12" text-anchor="middle" font-weight="normal">properties</text>
+<line x1="230.0" y1="277.0" x2="306.0" y2="277.0" stroke="#000" stroke-width="1.6"/>
+<polygon points="315.0,277.0 306.0,281.2 306.0,272.8" fill="#000"/>
+<text x="272.5" y="270.0" font-size="11" text-anchor="middle">publish</text>
+<line x1="530.0" y1="277.0" x2="611.0" y2="277.0" stroke="#000" stroke-width="1.6"/>
+<polygon points="620.0,277.0 611.0,281.2 611.0,272.8" fill="#000"/>
+<text x="575.0" y="270.0" font-size="11" text-anchor="middle">merge</text>
+<text x="45" y="322" font-size="11" text-anchor="start">Latency well under a second. Fast matters, because this is the data an operator acts on.</text>
+<text x="20" y="358" font-size="12" text-anchor="start" font-weight="bold">Why polling and not events for identity?</text>
+<text x="20" y="376" font-size="11" text-anchor="start">We read the IoTronic source. It emits no lifecycle notifications, so there is no event to subscribe to. Comparing</text>
+<text x="20" y="392" font-size="11" text-anchor="start">whole sets also means a board added while the twin layer was offline still gets its twin when the layer returns.</text>
+</svg>

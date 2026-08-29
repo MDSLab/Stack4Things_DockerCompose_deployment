@@ -1,0 +1,43 @@
+<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 920 390" width="920" height="390" font-family="Helvetica,Arial,sans-serif">
+<rect width="920" height="390" fill="#fff"/>
+<text x="20" y="26" font-size="15" font-weight="bold">Figure 4. The mistake we made five times, and the test that fixes it</text>
+<rect x="30" y="72" width="155" height="52" fill="#fff" stroke="#000" stroke-width="1.6"/>
+<text x="107.5" y="94.5" font-size="12" text-anchor="middle" font-weight="bold">Device</text>
+<text x="107.5" y="109.5" font-size="12" text-anchor="middle" font-weight="normal">publishes</text>
+<rect x="205" y="72" width="155" height="52" fill="#fff" stroke="#000" stroke-width="1.6"/>
+<text x="282.5" y="94.5" font-size="12" text-anchor="middle" font-weight="bold">Bridge</text>
+<text x="282.5" y="109.5" font-size="12" text-anchor="middle" font-weight="normal">forwards</text>
+<rect x="380" y="72" width="155" height="52" fill="#fff" stroke="#000" stroke-width="1.6"/>
+<text x="457.5" y="94.5" font-size="12" text-anchor="middle" font-weight="bold">RabbitMQ</text>
+<text x="457.5" y="109.5" font-size="12" text-anchor="middle" font-weight="normal">queues</text>
+<rect x="555" y="72" width="155" height="52" fill="#fff" stroke="#000" stroke-width="1.6"/>
+<text x="632.5" y="94.5" font-size="12" text-anchor="middle" font-weight="bold">Ditto</text>
+<text x="632.5" y="109.5" font-size="12" text-anchor="middle" font-weight="normal">converts</text>
+<rect x="730" y="72" width="155" height="52" fill="#fff" stroke="#000" stroke-width="1.6"/>
+<text x="807.5" y="94.5" font-size="12" text-anchor="middle" font-weight="bold">Twin</text>
+<text x="807.5" y="109.5" font-size="12" text-anchor="middle" font-weight="normal">stores</text>
+<line x1="186.0" y1="98.0" x2="194.0" y2="98.0" stroke="#000" stroke-width="1.6"/>
+<polygon points="203.0,98.0 194.0,102.2 194.0,93.8" fill="#000"/>
+<line x1="361.0" y1="98.0" x2="369.0" y2="98.0" stroke="#000" stroke-width="1.6"/>
+<polygon points="378.0,98.0 369.0,102.2 369.0,93.8" fill="#000"/>
+<line x1="536.0" y1="98.0" x2="544.0" y2="98.0" stroke="#000" stroke-width="1.6"/>
+<polygon points="553.0,98.0 544.0,102.2 544.0,93.8" fill="#000"/>
+<line x1="711.0" y1="98.0" x2="719.0" y2="98.0" stroke="#000" stroke-width="1.6"/>
+<polygon points="728.0,98.0 719.0,102.2 719.0,93.8" fill="#000"/>
+<rect x="380" y="158" width="155" height="34" fill="#ededed" stroke="#000" stroke-width="1.6"/>
+<text x="457.5" y="179.0" font-size="12" text-anchor="middle" font-weight="normal">status says OK</text>
+<line x1="457.0" y1="158.0" x2="457.0" y2="135.0" stroke="#000" stroke-width="1.6"/>
+<polygon points="457.0,126.0 461.2,135.0 452.8,135.0" fill="#000"/>
+<text x="556" y="180" font-size="11" text-anchor="start">A status field is one component's claim about itself.</text>
+<path d="M107,232 L107,258 L807,258 L807,232" fill="none" stroke="#000" stroke-width="1.8"/>
+<line x1="107.0" y1="232.0" x2="107.0" y2="215.0" stroke="#000" stroke-width="1.6"/>
+<polygon points="107.0,206.0 111.2,215.0 102.8,215.0" fill="#000"/>
+<line x1="807.0" y1="232.0" x2="807.0" y2="215.0" stroke="#000" stroke-width="1.6"/>
+<polygon points="807.0,206.0 811.2,215.0 802.8,215.0" fill="#000"/>
+<text x="457" y="282" font-size="12" text-anchor="middle" font-weight="bold">DELIVERY TEST: put a known message in one end, look for it at the other</text>
+<text x="457" y="300" font-size="11" text-anchor="middle">The only check that cannot lie, because it observes the result instead of a report about the result.</text>
+<rect x="30" y="320" width="860" height="58" fill="#ededed" stroke="#000" stroke-width="1.6"/>
+<text x="46" y="341" font-size="12" text-anchor="start" font-weight="bold">Five faults hid behind a healthy looking signal:</text>
+<text x="46" y="359" font-size="11" text-anchor="start">a connection said open while it could not deliver, a queue was acknowledged after conversion failed, a health check</text>
+<text x="46" y="374" font-size="11" text-anchor="start">passed on a session subscribed to nothing, a wait passed on the wrong service, and a suite passed on an empty system.</text>
+</svg>
