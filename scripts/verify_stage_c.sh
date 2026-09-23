@@ -83,11 +83,28 @@ else
   fi
   grep -q 'failed=0' <<<"$LAST" && ok "last pass had failed=0" \
     || no "last pass reports failures" "the count line names the failing operation"
-  # a steady stream of updated= on an idle system means something rewrites an
-  # always-changing value, which would emit a change event per board per cycle
-  UPD=$(grep -c 'updated=[1-9]' <<<"$PLOG")
-  [ "$UPD" -le 1 ] && ok "no update churn on an idle system ($UPD passes with updates)" \
-    || no "$UPD passes wrote updates while idle" "something is rewriting a changing value"
+  # Churn means EVERY pass rewrites something, which on an idle system implies
+  # a value that always differs and would emit a change event per board per
+  # cycle. A REAL change, a board coming online or being registered, is a burst
+  # followed by quiet.
+  #
+  # The first version counted every update anywhere in the log tail and could
+  # not tell those apart. Onboarding one board left this check failing for as
+  # long as the log remembered it, while the system was completely idle. The
+  # question is not how many updates ever happened, it is whether the
+  # provisioner is still writing NOW.
+  RECENT=$(grep 'pass complete' <<<"$PLOG" | tail -3)
+  CHURN=$(grep -c 'updated=[1-9]' <<<"$RECENT")
+  TOTAL=$(grep -c 'updated=[1-9]' <<<"$PLOG")
+  if [ "$CHURN" -lt 3 ]; then
+    ok "no update churn: $CHURN of the last 3 passes wrote updates"
+    [ "$TOTAL" -gt 0 ] && note "$TOTAL earlier pass(es) did write updates, which is
+        what a board being registered or coming online looks like"
+  else
+    no "3 consecutive passes wrote updates on an idle system" \
+       "something is rewriting a value that always differs. The provisioner log
+        names the field just above each 'pass complete' line."
+  fi
 fi
 
 head_ "4. Twins match boards"

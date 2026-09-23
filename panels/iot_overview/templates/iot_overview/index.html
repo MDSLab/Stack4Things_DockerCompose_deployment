@@ -1,0 +1,403 @@
+{% extends 'base.html' %}
+{% load i18n %}
+
+{% comment %}
+  Django's {# #} comment form must fit on ONE line. A two line one is not a
+  comment at all: it renders as text, and a browser hoists stray text out of a
+  table, which is why an early version of this page printed its own comment
+  above the header. Multi line comments use this tag instead.
+
+  Styled with Horizon's own Bootstrap classes plus a small inline block. No new
+  static files on purpose: any would pull in collectstatic and a category of
+  cache problems for no visual gain.
+{% endcomment %}
+
+{% block title %}{% trans "IoT Overview" %}{% endblock %}
+
+{% block page_header %}
+  <hr class="header_rule">
+  <h1>{% trans "IoT Overview" %}</h1>
+{% endblock page_header %}
+
+{% block main %}
+<style>
+  .s4t-cards { display: flex; flex-wrap: wrap; gap: 12px; margin-bottom: 20px; }
+  .s4t-card { border: 1px solid #ddd; border-radius: 4px; padding: 10px 18px;
+              min-width: 140px; background: #fafafa; }
+  .s4t-card .n { font-size: 24px; font-weight: 600; line-height: 1.1; }
+  .s4t-card .l { color: #777; font-size: 11px; letter-spacing: .04em;
+                 text-transform: uppercase; }
+  .s4t-kv { font-family: Menlo, Consolas, monospace; font-size: 12px; }
+  .s4t-muted { color: #999; }
+  .s4t-stale { color: #a94442; }
+  .s4t-fresh { color: #3c763d; }
+  .s4t-fail  { color: #a94442; }
+  .s4t-board { cursor: pointer; }
+  .s4t-board:hover { background: #f0f7ff !important; }
+
+  /* Modal. Bootstrap's classes for the look, driven by our own code so the
+     page does not depend on Horizon's bootstrap.js being loaded here. */
+  .s4t-backdrop { position: fixed; top: 0; left: 0; right: 0; bottom: 0;
+                  background: rgba(0,0,0,.45); z-index: 1040; }
+  .s4t-modal { position: fixed; top: 0; left: 0; right: 0; bottom: 0;
+               z-index: 1050; overflow-y: auto; }
+  .s4t-modal-dialog { max-width: 940px; margin: 40px auto; background: #fff;
+                      border-radius: 5px; box-shadow: 0 5px 20px rgba(0,0,0,.3); }
+  .s4t-modal-head { padding: 14px 20px; border-bottom: 1px solid #e5e5e5; }
+  .s4t-modal-body { padding: 16px 20px; max-height: 70vh; overflow-y: auto; }
+  .s4t-modal-foot { padding: 10px 20px; border-top: 1px solid #e5e5e5;
+                    display: flex; justify-content: space-between;
+                    align-items: center; }
+  .s4t-x { float: right; font-size: 22px; line-height: 1; cursor: pointer;
+           color: #999; border: 0; background: none; }
+  .s4t-sec { font-size: 12px; text-transform: uppercase; letter-spacing: .04em;
+             color: #555; margin: 18px 0 6px; }
+  .s4t-sec:first-child { margin-top: 0; }
+  .s4t-tbl { width: 100%; font-size: 12px; }
+  .s4t-tbl th { color: #777; font-weight: 600; text-align: left;
+                border-bottom: 1px solid #ddd; padding: 4px 10px 4px 0; }
+  .s4t-tbl td { padding: 4px 10px 4px 0; border-bottom: 1px solid #f2f2f2;
+                vertical-align: top; }
+  .s4t-diff { color: #8a6d3b; background: #fcf8e3; }
+  .s4t-new td { animation: s4tflash 2.5s ease-out; }
+  @keyframes s4tflash { from { background: #d9edf7; } to { background: transparent; } }
+  .s4t-dot { display: inline-block; width: 8px; height: 8px; border-radius: 50%;
+             background: #3c763d; margin-right: 6px; }
+</style>
+
+{% if error %}
+  <div class="alert alert-warning">
+    <strong>{% trans "The dashboard aggregator could not be reached." %}</strong>
+    {% trans "Board data below may be empty." %}
+    <span class="s4t-kv">{{ error }}</span>
+  </div>
+{% endif %}
+
+{% for source, message in source_errors.items %}
+  <div class="alert alert-warning">
+    <strong>{{ source }}:</strong> <span class="s4t-kv">{{ message }}</span>
+  </div>
+{% endfor %}
+
+<div class="s4t-cards">
+  <div class="s4t-card"><div class="n">{{ totals.boards|default:"0" }}</div>
+    <div class="l">{% trans "Boards" %}</div></div>
+  <div class="s4t-card"><div class="n">{{ totals.online|default:"0" }}</div>
+    <div class="l">{% trans "Online now" %}</div></div>
+  <div class="s4t-card"><div class="n">{{ totals.agents_seen|default:"0" }}</div>
+    <div class="l">{% trans "Agents ever seen" %}</div></div>
+  <div class="s4t-card"><div class="n">{{ totals.with_twin|default:"0" }}</div>
+    <div class="l">{% trans "With a twin" %}</div></div>
+  <div class="s4t-card"><div class="n">{{ totals.audit_records|default:"0" }}</div>
+    <div class="l">{% trans "Audit records" %}</div></div>
+</div>
+
+<h3>{% trans "Boards" %}</h3>
+<p class="s4t-muted">{% trans "Click a board to open its twin properties and its live activity." %}</p>
+
+<table class="table table-condensed">
+  <thead>
+    <tr>
+      <th style="width:22%">{% trans "Name" %}</th>
+      <th>{% trans "Status" %}</th>
+      <th>{% trans "Agent" %}</th>
+      <th>{% trans "Twin" %}</th>
+      <th>{% trans "Last reported" %}</th>
+      <th>{% trans "Age" %}</th>
+      <th>{% trans "Last action" %}</th>
+      <th>{% trans "By" %}</th>
+      <th>{% trans "Events" %}</th>
+    </tr>
+  </thead>
+  <tbody id="s4t-rows">
+  {% for b in boards %}
+    <tr class="s4t-board" id="row-{{ b.uuid }}"
+        data-uuid="{{ b.uuid }}" data-name="{{ b.name }}">
+      <td>{{ b.name }}<br>
+        <span class="s4t-kv s4t-muted">{{ b.uuid }}</span></td>
+      <td class="c-status">
+        {% if b.online %}<span class="label label-success">{{ b.status }}</span>
+        {% else %}<span class="label label-default">{{ b.status }}</span>{% endif %}
+      </td>
+      <td class="c-agent">
+        {% if b.agent_seen %}{{ b.lr_version }}
+        {% else %}<span class="s4t-muted">{% trans "never seen" %}</span>{% endif %}
+      </td>
+      <td class="c-twin">
+        {% if b.twin.present %}rev {{ b.twin.revision }}
+        {% else %}<span class="s4t-stale">{% trans "missing" %}</span>{% endif %}
+      </td>
+      <td class="c-tele s4t-kv">
+        {% if b.twin.telemetry %}
+          {% for k, v in b.twin.telemetry.items %}{{ k }}={{ v }} {% endfor %}
+        {% else %}<span class="s4t-muted">{% trans "no telemetry" %}</span>{% endif %}
+      </td>
+      <td class="c-age">
+        {% if b.twin.age_human is None %}
+          <span class="s4t-muted">{% trans "unknown" %}</span>
+        {% elif b.twin.stale %}
+          <span class="s4t-stale">{{ b.twin.age_human }}</span>
+        {% else %}
+          <span class="s4t-fresh">{{ b.twin.age_human }}</span>
+        {% endif %}
+      </td>
+      <td class="c-action s4t-kv">{{ b.audit.last_action|default:"-" }}</td>
+      <td class="c-by">{{ b.audit.last_operator|default:"-" }}</td>
+      <td class="c-count">{{ b.audit.count }}</td>
+    </tr>
+  {% empty %}
+    <tr><td colspan="9" class="s4t-muted">{% trans "No boards registered." %}</td></tr>
+  {% endfor %}
+  </tbody>
+</table>
+
+<h3>{% trans "Paths" %}</h3>
+{% comment %}
+  Health is "when did this path last deliver something", not a green dot
+  meaning a process is running. A container cannot see its siblings' health
+  without the Docker socket, and delivery is the more useful question anyway.
+{% endcomment %}
+<table class="table table-condensed" style="max-width:640px">
+  <tbody>
+  {% for h in health %}
+    <tr>
+      <td><strong>{{ h.name }}</strong></td>
+      <td class="s4t-muted">{{ h.detail }}</td>
+      <td>
+        {% if h.age_seconds is None %}<span class="s4t-muted">-</span>
+        {% else %}{{ h.age_seconds|floatformat:0 }}s {% trans "ago" %}{% endif %}
+      </td>
+    </tr>
+  {% endfor %}
+  </tbody>
+</table>
+
+<p class="s4t-muted">
+  {% trans "Generated" %} <span id="s4t-generated">{{ generated_at }}</span>
+</p>
+
+<div class="s4t-backdrop" id="s4t-backdrop" style="display:none"></div>
+<div class="s4t-modal" id="s4t-modal" style="display:none" role="dialog" aria-modal="true">
+  <div class="s4t-modal-dialog">
+    <div class="s4t-modal-head">
+      <button class="s4t-x" id="s4t-x" aria-label="Close">&times;</button>
+      <h4 style="margin:0" id="s4t-title"></h4>
+      <div class="s4t-kv s4t-muted" id="s4t-sub"></div>
+    </div>
+    <div class="s4t-modal-body" id="s4t-body"></div>
+    <div class="s4t-modal-foot">
+      <span class="s4t-muted" id="s4t-live"></span>
+      <button class="btn btn-default btn-sm" id="s4t-close">{% trans "Close" %}</button>
+    </div>
+  </div>
+</div>
+
+<script>
+(function () {
+  var DATA = "data/", BOARD = "board/";
+  var open = null, timer = null, seen = 0;
+
+  function esc(s) {
+    return String(s === null || s === undefined ? "" : s)
+      .replace(/&/g, "&amp;").replace(/</g, "&lt;").replace(/>/g, "&gt;")
+      .replace(/"/g, "&quot;");
+  }
+  function val(v) {
+    if (v === null || v === undefined) { return ""; }
+    return (typeof v === "object") ? JSON.stringify(v) : String(v);
+  }
+
+  // ---- twin properties -------------------------------------------------
+  // Reported and desired side by side, because that pair IS the twin: the
+  // device owns the left column, an operator owns the right one, and the
+  // interesting moment is when they disagree. Two separate tables would hide
+  // exactly the thing worth seeing.
+  function propsTable(reported, desired) {
+    reported = reported || {}; desired = desired || {};
+    var keys = Object.keys(reported).concat(Object.keys(desired))
+      .filter(function (k, i, a) { return a.indexOf(k) === i; }).sort();
+    if (!keys.length) {
+      return '<p class="s4t-muted">Nothing reported and nothing desired.</p>';
+    }
+    return '<table class="s4t-tbl"><thead><tr>' +
+      '<th style="width:34%">Property</th><th style="width:33%">Reported</th>' +
+      '<th style="width:33%">Desired</th></tr></thead><tbody>' +
+      keys.map(function (k) {
+        var r = val(reported[k]), dv = val(desired[k]);
+        var differs = (k in desired) && r !== dv;
+        return '<tr' + (differs ? ' class="s4t-diff"' : '') + '>' +
+          '<td>' + esc(k) + '</td>' +
+          '<td class="s4t-kv">' + (k in reported ? esc(r) :
+            '<span class="s4t-muted">-</span>') + '</td>' +
+          '<td class="s4t-kv">' + (k in desired ? esc(dv) :
+            '<span class="s4t-muted">-</span>') + '</td></tr>';
+      }).join("") + '</tbody></table>';
+  }
+  function attrTable(attrs) {
+    var keys = attrs ? Object.keys(attrs).sort() : [];
+    if (!keys.length) { return '<p class="s4t-muted">No attributes.</p>'; }
+    return '<table class="s4t-tbl"><tbody>' + keys.map(function (k) {
+      return '<tr><td style="width:34%">' + esc(k) + '</td><td class="s4t-kv">' +
+             esc(val(attrs[k])) + '</td></tr>';
+    }).join("") + '</tbody></table>';
+  }
+
+  // ---- activity --------------------------------------------------------
+  function actionsTable(events, highlightAbove) {
+    if (!events || !events.length) {
+      return '<p class="s4t-muted">No audit records for this board yet.</p>';
+    }
+    return '<table class="s4t-tbl"><thead><tr>' +
+      '<th style="width:20%">Time (UTC)</th><th style="width:22%">Action</th>' +
+      '<th style="width:16%">By</th><th style="width:14%">Outcome</th>' +
+      '<th style="width:20%">Detail</th><th>Seq</th></tr></thead><tbody>' +
+      events.map(function (e) {
+        var a = e.action || {}, actor = e.actor || {};
+        var failed = a.outcome && a.outcome !== "success";
+        var isNew = highlightAbove && e.sequence > highlightAbove;
+        var detail = a.target || "";
+        if (!detail && a.detail) { detail = JSON.stringify(a.detail); }
+        return '<tr' + (isNew ? ' class="s4t-new"' : '') + '>' +
+          '<td class="s4t-kv s4t-muted">' +
+            esc((e.timestamp || "").replace("T", " ").slice(0, 19)) + '</td>' +
+          '<td class="s4t-kv">' + esc(e.machine_action) + '</td>' +
+          '<td>' + (e.operator_name ? esc(e.operator_name) :
+            '<span class="s4t-muted">' + esc(actor.type || "-") + '</span>') + '</td>' +
+          '<td class="' + (failed ? "s4t-fail" : "") + '">' + esc(a.outcome || "") +
+            (a.status_code ? " " + esc(a.status_code) : "") + '</td>' +
+          '<td class="s4t-kv s4t-muted" title="' + esc(detail) + '">' +
+            esc(detail.length > 40 ? detail.slice(0, 40) + "..." : detail) + '</td>' +
+          '<td class="s4t-kv s4t-muted">#' + esc(e.sequence) + '</td></tr>';
+      }).join("") + '</tbody></table>';
+  }
+
+  function render(d, first) {
+    var twin = d.twin || {};
+    var tele = ((twin.features || {}).telemetry || {});
+    var events = d.events || [];
+    var maxSeq = events.length ? events[0].sequence : 0;
+
+    if (first) {
+      document.getElementById("s4t-body").innerHTML =
+        '<div class="s4t-sec">Twin properties</div>' +
+        '<div id="s4t-props">' + propsTable(tele.properties, tele.desiredProperties) + '</div>' +
+        '<div class="s4t-sec">Attributes</div>' +
+        '<div id="s4t-attrs">' + attrTable(twin.attributes) + '</div>' +
+        '<div class="s4t-sec">Actions</div>' +
+        '<div id="s4t-acts">' + actionsTable(events, 0) + '</div>';
+    } else {
+      document.getElementById("s4t-props").innerHTML =
+        propsTable(tele.properties, tele.desiredProperties);
+      document.getElementById("s4t-attrs").innerHTML = attrTable(twin.attributes);
+      // Anything above the highest sequence from the previous poll is new and
+      // flashes once, so a change that arrives while you are reading is
+      // visible rather than silently replacing what was there.
+      document.getElementById("s4t-acts").innerHTML = actionsTable(events, seen);
+    }
+    seen = maxSeq;
+
+    var sub = [];
+    if (twin._revision) { sub.push("twin revision " + twin._revision); }
+    if (twin._modified) { sub.push("last change " + twin._modified); }
+    document.getElementById("s4t-sub").textContent = sub.join("  |  ");
+    document.getElementById("s4t-live").innerHTML =
+      '<span class="s4t-dot"></span>live, updated ' +
+      new Date().toLocaleTimeString();
+  }
+
+  function load(uuid, first) {
+    fetch(BOARD + encodeURIComponent(uuid) + "/?limit=100",
+          {credentials: "same-origin"})
+      .then(function (r) { return r.json(); })
+      .then(function (d) {
+        if (open !== uuid) { return; }        // a different board was opened
+        if (d.error) {
+          document.getElementById("s4t-live").innerHTML =
+            '<span class="s4t-stale">' + esc(d.error) + '</span>';
+          return;
+        }
+        render(d, first);
+      })
+      .catch(function (e) {
+        document.getElementById("s4t-live").innerHTML =
+          '<span class="s4t-stale">Could not load: ' + esc(e) + '</span>';
+      });
+  }
+
+  function show(uuid, name) {
+    open = uuid; seen = 0;
+    document.getElementById("s4t-title").textContent = name;
+    document.getElementById("s4t-sub").textContent = uuid;
+    document.getElementById("s4t-body").innerHTML =
+      '<p class="s4t-muted">Loading...</p>';
+    document.getElementById("s4t-live").textContent = "";
+    document.getElementById("s4t-backdrop").style.display = "";
+    document.getElementById("s4t-modal").style.display = "";
+    load(uuid, true);
+    // Three seconds while open. The dialog is the one place a person is
+    // actually watching, so it polls faster than the table behind it.
+    timer = setInterval(function () { load(uuid, false); }, 3000);
+  }
+  function hide() {
+    open = null;
+    if (timer) { clearInterval(timer); timer = null; }
+    document.getElementById("s4t-backdrop").style.display = "none";
+    document.getElementById("s4t-modal").style.display = "none";
+  }
+
+  document.getElementById("s4t-rows").addEventListener("click", function (ev) {
+    var tr = ev.target.closest ? ev.target.closest("tr.s4t-board") : null;
+    if (tr) { show(tr.getAttribute("data-uuid"), tr.getAttribute("data-name")); }
+  });
+  document.getElementById("s4t-x").addEventListener("click", hide);
+  document.getElementById("s4t-close").addEventListener("click", hide);
+  document.getElementById("s4t-backdrop").addEventListener("click", hide);
+  document.addEventListener("keydown", function (e) {
+    if (e.key === "Escape" && open) { hide(); }
+  });
+
+  // ---- the table behind the dialog -------------------------------------
+  // Cells are updated in place rather than the body being rebuilt, so the
+  // row identity survives and nothing flickers. Polling rather than SSE
+  // because a stream to the aggregator would be cross origin and would put
+  // its credentials back in the browser, which this panel exists to avoid.
+  function setCell(uuid, cls, html) {
+    var row = document.getElementById("row-" + uuid);
+    if (!row) { return; }
+    var el = row.querySelector("." + cls);
+    if (el) { el.innerHTML = html; }
+  }
+  function refresh() {
+    fetch(DATA, {credentials: "same-origin"})
+      .then(function (r) { return r.json(); })
+      .then(function (d) {
+        if (d.error) { return; }               // keep the last good render
+        (d.boards || []).forEach(function (b) {
+          setCell(b.uuid, "c-status", '<span class="label label-' +
+            (b.online ? "success" : "default") + '">' + esc(b.status) + '</span>');
+          setCell(b.uuid, "c-agent", b.agent_seen ? esc(b.lr_version)
+            : '<span class="s4t-muted">never seen</span>');
+          setCell(b.uuid, "c-twin", b.twin.present ? "rev " + esc(b.twin.revision)
+            : '<span class="s4t-stale">missing</span>');
+          setCell(b.uuid, "c-tele", b.twin.telemetry
+            ? Object.keys(b.twin.telemetry).map(function (k) {
+                return esc(k) + "=" + esc(b.twin.telemetry[k]); }).join(" ")
+            : '<span class="s4t-muted">no telemetry</span>');
+          setCell(b.uuid, "c-age",
+            (b.twin.age_human === null || b.twin.age_human === undefined)
+            ? '<span class="s4t-muted">unknown</span>'
+            : '<span class="' + (b.twin.stale ? "s4t-stale" : "s4t-fresh") + '">' +
+              esc(b.twin.age_human) + '</span>');
+          setCell(b.uuid, "c-action", esc(b.audit.last_action || "-"));
+          setCell(b.uuid, "c-by", esc(b.audit.last_operator || "-"));
+          setCell(b.uuid, "c-count", esc(b.audit.count));
+        });
+        var g = document.getElementById("s4t-generated");
+        if (g && d.generated_at) { g.textContent = d.generated_at; }
+      })
+      .catch(function () { /* leave the last good render on screen */ });
+  }
+  setInterval(refresh, 5000);
+})();
+</script>
+{% endblock %}

@@ -8,3 +8,4 @@ __pycache__/
 
 scripts/venv/
 conf_ditto/nginx.htpasswd
+docs/Audit_Logger_Student_Report.md

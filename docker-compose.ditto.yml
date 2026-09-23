@@ -321,6 +321,54 @@ services:
       retries: 6
       start_period: 30s
 
+  # --------------------------------------------------------------- stage L4
+  # Puts the audit proxy into Horizon's path, without touching Horizon and
+  # without giving the proxy any credentials of its own.
+  #
+  # Horizon holds no conductor URL. It resolves the `iot` service through the
+  # Keystone catalog on every call, so changing one catalog entry is the whole
+  # insertion. Keystone's setup block reads this variable and reconciles the
+  # PUBLIC endpoint on every boot; the base file defaults it to the conductor,
+  # so the plain stack is unaffected and this overlay is what switches it.
+  #
+  # Only `public` is redirected. Internal and admin traffic still goes
+  # straight to the conductor, which keeps the audit log a record of operator
+  # actions rather than of the platform talking to itself.
+  #
+  # Two consequences worth knowing. Keystone only runs this at ITS start, so
+  # after adding the overlay to a running system you must recreate keystone.
+  # And Horizon re-reads the catalog only when a new token is issued, so an
+  # open session keeps the old URL until you log out and back in.
+  keystone:
+    environment:
+      IOT_PUBLIC_ENDPOINT_URL: "${IOT_PUBLIC_ENDPOINT_URL:-http://s4t-audit-proxy:8812}"
+
+  # --------------------------------------------------------------- stage L6
+  # The IoT Overview panel, added to Horizon's sidebar by bind mount.
+  #
+  # Two paths, both confirmed by inspecting the running container:
+  #   * the LIVE package is in dist-packages. /opt/build/iotronic-ui is only
+  #     the source checkout used at build time, and mounting over it would
+  #     have no effect at all.
+  #   * enabled files are read from openstack_dashboard/enabled/, which is
+  #     where the installer put _6000_iot.py and the other panels.
+  #
+  # Read only, because Python 2 tries to write .pyc files next to the source
+  # and carries on quietly when it cannot.
+  #
+  # Apache must be restarted for a new enabled file to be read:
+  #   docker exec iotronic-ui apachectl -k graceful
+  #
+  # To remove the panel, delete these two lines and restart the container.
+  # Nothing else in the deployment refers to it.
+  iotronic-ui:
+    volumes:
+      - ./panels/iot_overview:/usr/local/lib/python2.7/dist-packages/iotronic_ui/iot/iot_overview:ro
+      # 6005: after _6000_iot.py, which registers the dashboard itself, and
+      # before _6010_iot_boards_panel.py. Horizon builds the sidebar in the
+      # order it processes these files, so the number IS the position.
+      - ./panels/_6005_iot_overview_panel.py:/usr/share/openstack-dashboard/openstack_dashboard/enabled/_6005_iot_overview_panel.py:ro
+
   s4t-ditto-bridge:
     build:
       context: .
@@ -366,6 +414,164 @@ services:
       resources:
         limits:
           memory: ${MEM_BRIDGE:-192m}
+    logging:
+      driver: json-file
+      options: { max-size: "20m", max-file: "3" }
+
+  # --------------------------------------------------------------------
+  # Stage L1 of the audit logger. Consumes the twin event queue that stage B
+  # created and has never had a consumer, and republishes each change as an
+  # audit record for the ledger developer.
+  #
+  # It captures DEVICE and SYSTEM activity only. Operator identity arrives in
+  # stage L3, which proxies the conductor and resolves the Keystone token, so
+  # every record here carries operator_name of null. See
+  # docs/Audit_Logger_Service_Design.md section 3 for why null and not a
+  # placeholder.
+  # --------------------------------------------------------------------
+  s4t-audit-logger:
+    build:
+      context: .
+      dockerfile: docker/ditto-tools/Dockerfile
+    image: s4t/ditto-tools:local
+    container_name: s4t-audit-logger
+    restart: unless-stopped
+    command: ["s4t_audit_logger.py"]
+    networks:
+      s4t:
+        aliases: [s4t-audit-logger]
+    depends_on:
+      rabbitmq:
+        condition: service_healthy
+      # the source queue is declared by the bootstrap, so there is nothing to
+      # consume until it has run
+      s4t-ditto-bootstrap:
+        condition: service_completed_successfully
+    environment:
+      S4T_AMQP_HOST: "${S4T_AMQP_HOST:-rabbitmq}"
+      S4T_AMQP_PORT: "${S4T_AMQP_PORT:-5672}"
+      S4T_AMQP_USER: "${S4T_AMQP_USER:-openstack}"
+      S4T_AMQP_PASS: "${S4T_AMQP_PASS:-unime}"
+      S4T_AMQP_VHOST: "${S4T_AMQP_VHOST:-/}"
+      AUDIT_SOURCE_QUEUE: "${AUDIT_SOURCE_QUEUE:-ditto.twin.events}"
+      AUDIT_OPERATOR_QUEUE: "${AUDIT_OPERATOR_QUEUE:-s4t.audit.ingest}"
+      AUDIT_QUEUE: "${AUDIT_QUEUE:-s4t.audit}"
+      AUDIT_DB: "/data/audit.db"
+      AUDIT_API_PORT: "8890"
+      # --------------------------------------------------------------
+      # The dashboard aggregator, consumed by the IoT Overview panel in
+      # Horizon. It listens on this port and is NOT published to the host:
+      # its only client is iotronic-ui, on this Docker network. Unset the
+      # variable to switch the dashboard off entirely; the audit service
+      # does not depend on it and will not notice.
+      #
+      # The Ditto and database credentials below are the same ones
+      # s4t-ditto-provisioner already uses, so no new secret enters the
+      # deployment. Both reads are read only.
+      # --------------------------------------------------------------
+      DASHBOARD_PORT: "${DASHBOARD_PORT:-8891}"
+      DITTO_URL: "http://ditto-nginx:80"
+      DITTO_USER: "${DITTO_API_USER:-s4t}"
+      DITTO_PASS: "${DITTO_API_PASSWORD:?set DITTO_API_PASSWORD in .env}"
+      DITTO_NAMESPACE: "${DITTO_NAMESPACE:-s4t}"
+      S4T_DB_HOST: "${S4T_DB_HOST:-iotronic-db}"
+      S4T_DB_PORT: "${S4T_DB_PORT:-3306}"
+      S4T_DB_USER: "${S4T_DB_USER:-iotronic}"
+      S4T_DB_PASS: "${S4T_DB_PASS:-unime}"
+      S4T_DB_NAME: "${S4T_DB_NAME:-iotronic}"
+      AUDIT_API_TOKEN: "${AUDIT_API_TOKEN:?set AUDIT_API_TOKEN in .env}"
+      AUDIT_RETENTION_DAYS: "${AUDIT_RETENTION_DAYS:-0}"
+      HEARTBEAT_FILE: "/tmp/audit-alive"
+    volumes:
+      - s4t_audit_data:/data
+    ports:
+      - "${AUDIT_API_EXTERNAL_PORT:-8890}:8890"
+    healthcheck:
+      test: ["CMD-SHELL", "test -f /tmp/audit-alive && [ $$(( $$(date +%s) - $$(stat -c %Y /tmp/audit-alive) )) -lt 30 ]"]
+      interval: 15s
+      timeout: 5s
+      retries: 3
+      start_period: 30s
+    deploy:
+      resources:
+        limits:
+          memory: "${MEM_AUDIT_LOGGER:-160m}"
+    logging:
+      driver: json-file
+      options: { max-size: "20m", max-file: "3" }
+
+  # --------------------------------------------------------------------
+  # Stage L4. Captures WHO acted on a machine.
+  #
+  # Horizon resolves the conductor through the Keystone catalog, so pointing
+  # the PUBLIC endpoint here puts this in the path without editing Horizon or
+  # the conductor:
+  #   openstack endpoint set <public-id> --url http://s4t-audit-proxy:8812
+  #
+  # It does not write to the database. It publishes to s4t.audit.ingest and the
+  # logger stays the single writer, because the sequence is the ledger
+  # developer's cursor and must come from one place.
+  # --------------------------------------------------------------------
+  s4t-audit-proxy:
+    build:
+      context: .
+      dockerfile: docker/ditto-tools/Dockerfile
+    image: s4t/ditto-tools:local
+    container_name: s4t-audit-proxy
+    restart: unless-stopped
+    command: ["s4t_audit_proxy.py"]
+    networks:
+      s4t:
+        aliases: [s4t-audit-proxy]
+    depends_on:
+      rabbitmq:
+        condition: service_healthy
+      # needed to bind the catalog on startup, and to validate tokens at all
+      keystone:
+        condition: service_healthy
+    environment:
+      S4T_AMQP_HOST: "${S4T_AMQP_HOST:-rabbitmq}"
+      S4T_AMQP_USER: "${S4T_AMQP_USER:-openstack}"
+      S4T_AMQP_PASS: "${S4T_AMQP_PASS:-unime}"
+      S4T_AMQP_VHOST: "${S4T_AMQP_VHOST:-/}"
+      AUDIT_OPERATOR_QUEUE: "${AUDIT_OPERATOR_QUEUE:-s4t.audit.ingest}"
+      PROXY_PORT: "8812"
+      PROXY_UPSTREAM: "http://iotronic-conductor:8812"
+      OS_AUTH_URL: "http://keystone:5000"
+      # fail open by default: a logging fault must not stop machine operation.
+      # The sequence gap makes any loss visible. Set to 1 for fail closed.
+      AUDIT_FAIL_CLOSED: "${AUDIT_FAIL_CLOSED:-0}"
+      HEARTBEAT_FILE: "/tmp/proxy-alive"
+      # --------------------------------------------------------------
+      # Catalog binding is OFF, and this container holds NO credentials.
+      #
+      # The public `iot` endpoint is pointed at this proxy by Keystone's own
+      # setup block, via IOT_PUBLIC_ENDPOINT_URL, set on the keystone service
+      # further down this file. Keystone already owns the catalog and already
+      # has the rights to change it, so nothing new is exposed. The proxy sits
+      # in the path of every operator action and should not be able to rewrite
+      # service discovery.
+      #
+      # The trade: nothing restores the endpoint when this container stops, so
+      # Horizon will fail until it is repointed. `restart: unless-stopped`
+      # makes that rare and check 1 of verify_audit_logger.sh catches it.
+      # Setting AUDIT_BIND_ENDPOINT=1 re-enables self-binding with restore,
+      # but then this service needs OS_USERNAME and OS_PASSWORD.
+      # --------------------------------------------------------------
+      AUDIT_BIND_ENDPOINT: "${AUDIT_BIND_ENDPOINT:-0}"
+    # SIGTERM has to reach the restore before the container is killed. Docker's
+    # default grace period is 10s and the restore is capped at 8s.
+    stop_grace_period: 20s
+    healthcheck:
+      test: ["CMD-SHELL", "test -f /tmp/proxy-alive && [ $$(( $$(date +%s) - $$(stat -c %Y /tmp/proxy-alive) )) -lt 30 ]"]
+      interval: 15s
+      timeout: 5s
+      retries: 3
+      start_period: 30s
+    deploy:
+      resources:
+        limits:
+          memory: "${MEM_AUDIT_PROXY:-160m}"
     logging:
       driver: json-file
       options: { max-size: "20m", max-file: "3" }
@@ -426,5 +632,7 @@ services:
       options: { max-size: "20m", max-file: "3" }
 
 volumes:
+  s4t_audit_data:
+    name: s4t_audit_data
   ditto_mongodb_data:
     name: ditto_mongodb_data

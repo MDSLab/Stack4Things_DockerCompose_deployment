@@ -307,19 +307,12 @@ def connection_body(opts):
                 ],
                 "authorizationContext": [opts.subject],
             },
-            {
-                # change events for the predictor. extraFields carries the
-                # pipeline descriptor in band, so the predictor never has to
-                # call back to Ditto for its own configuration.
-                # separate exchange, see declare_amqp(): two targets on one
-                # exchange crash the Ditto publisher on every channel open
-                "address": f"{opts.events_exchange}/{opts.events_key}",
-                "topics": [
-                    "_/_/things/twin/events"
-                    "?extraFields=attributes/pipeline,features/telemetry/properties"
-                ],
-                "authorizationContext": [opts.subject],
-            },
+            # The change-event target that used to sit here has MOVED to its own
+            # connection, see events_connection_body(). Ditto does not publish an
+            # event back to the connection that caused it, so a target on this
+            # connection can never see telemetry arriving through this
+            # connection's own source. It reported status "open" and
+            # "Producer started" and had never delivered a single message.
         ],
         "mappingDefinitions": {
             "s4t-telemetry": {
@@ -332,7 +325,44 @@ def connection_body(opts):
     }
 
 
-def put_connection(http, opts):
+def events_connection_body(opts):
+    """A SECOND connection carrying only the twin-event target.
+
+    Why a separate connection rather than another target on the first one:
+    Ditto suppresses an event on the connection that produced it, to stop a
+    connection feeding itself in a loop. Telemetry enters through the ingest
+    connection's source, so any target on that same connection never sees it.
+    Verified empirically: an identical change to the identical path was
+    delivered when made over HTTP and silently suppressed when it arrived
+    through the source.
+
+    This connection therefore declares NO sources. It cannot loop, and it sees
+    every twin change regardless of origin.
+    """
+    return {
+        "id": opts.events_connection_id,
+        "name": "Stack4Things twin change events",
+        "connectionType": "amqp-091",
+        "connectionStatus": "open",
+        "failoverEnabled": True,
+        "uri": (f"amqp://{urllib.parse.quote(opts.amqp_user, safe='')}"
+                f":{urllib.parse.quote(opts.amqp_pass, safe='')}"
+                f"@{opts.amqp_host}:{opts.amqp_port}"
+                f"/{urllib.parse.quote(opts.amqp_vhost, safe='')}"),
+        "sources": [],
+        "targets": [{
+            "address": f"{opts.events_exchange}/{opts.events_key}",
+            "topics": [
+                "_/_/things/twin/events"
+                "?extraFields=attributes/boardName,attributes/pipeline,"
+                "features/telemetry/properties"
+            ],
+            "authorizationContext": [opts.subject],
+        }],
+    }
+
+
+def put_connection(http, opts, conn_id=None, body=None):
     """Create or replace the connection, keeping a STABLE id.
 
     The two routes are not interchangeable and this cost an afternoon:
@@ -351,18 +381,19 @@ def put_connection(http, opts):
     recommended HTTP API to modify afterwards. If Ditto ever drops piggyback,
     only this function changes.
     """
-    path = f"/api/2/connections/{urllib.parse.quote(opts.connection_id)}"
+    conn_id = conn_id or opts.connection_id
+    body = body if body is not None else connection_body(opts)
+    path = f"/api/2/connections/{urllib.parse.quote(conn_id)}"
     code, _ = http.call("GET", path, user=opts.devops_user,
                         password=opts.devops_pass, mutating=False)
-    body = connection_body(opts)
 
     if code == 200:
         code, resp = http.call("PUT", path, body, user=opts.devops_user,
                                password=opts.devops_pass)
         if code in (200, 204):
-            LOG.info("connection %s updated", opts.connection_id)
+            LOG.info("connection %s updated", conn_id)
             return True
-        LOG.error("could not modify connection %s (%s): %s", opts.connection_id,
+        LOG.error("could not modify connection %s (%s): %s", conn_id,
                   code, json.dumps(resp)[:400])
         return False
 
@@ -378,9 +409,9 @@ def put_connection(http, opts):
                            user=opts.devops_user, password=opts.devops_pass)
     if code in (200, 201, 204):
         LOG.info("connection %s created with a fixed id via piggyback",
-                 opts.connection_id)
+                 conn_id)
         return True
-    LOG.error("could not create connection %s (%s): %s", opts.connection_id, code,
+    LOG.error("could not create connection %s (%s): %s", conn_id, code,
               json.dumps(resp)[:400])
     return False
 
@@ -400,19 +431,22 @@ def verify(http, opts):
         LOG.error("VERIFY FAILED: policy %s not readable (%s)", opts.policy_id, code)
         ok = False
 
+    for conn_id in (opts.connection_id, opts.events_connection_id):
+        path = f"/api/2/connections/{urllib.parse.quote(conn_id)}"
+        code, conn = http.call("GET", path, user=opts.devops_user,
+                               password=opts.devops_pass, mutating=False)
+        if code != 200:
+            LOG.error("VERIFY FAILED: connection %s not readable (%s)", conn_id, code)
+            return False
+        LOG.info("verified: connection %s exists, status <%s>, %d source(s), %d target(s)",
+                 conn_id, conn.get("connectionStatus"),
+                 len(conn.get("sources") or []), len(conn.get("targets") or []))
+        if conn.get("connectionStatus") != "open":
+            LOG.error("VERIFY FAILED: connection %s is not open", conn_id)
+            ok = False
+    # liveStatus below is checked on the ingest connection, which is the one
+    # whose credentials and queues can fail
     path = f"/api/2/connections/{urllib.parse.quote(opts.connection_id)}"
-    code, conn = http.call("GET", path, user=opts.devops_user,
-                           password=opts.devops_pass, mutating=False)
-    if code != 200:
-        LOG.error("VERIFY FAILED: connection %s not readable (%s)",
-                  opts.connection_id, code)
-        return False
-    LOG.info("verified: connection %s exists, status <%s>, %d source(s), %d target(s)",
-             opts.connection_id, conn.get("connectionStatus"),
-             len(conn.get("sources") or []), len(conn.get("targets") or []))
-    if conn.get("connectionStatus") != "open":
-        LOG.error("VERIFY FAILED: connection is not open")
-        ok = False
 
     # live status, which is where a bad credential or a missing queue shows up
     code, st = http.call("GET", path + "/status", user=opts.devops_user,
@@ -462,6 +496,7 @@ def load_opts(args):
     o.subjects = [s.strip() for s in
                   env("DITTO_POLICY_SUBJECTS", o.subject).split(",") if s.strip()]
     o.connection_id = env("DITTO_CONNECTION_ID", "s4t-rabbitmq")
+    o.events_connection_id = env("DITTO_EVENTS_CONNECTION_ID", "s4t-events")
 
     o.amqp_host = env("S4T_AMQP_HOST", "rabbitmq")
     o.amqp_port = int(env("S4T_AMQP_PORT", "5672"))
@@ -505,6 +540,9 @@ def main(argv=None):
     if not args.skip_amqp and not declare_amqp(o):
         return 1
     if not put_policy(http, o):
+        return 1
+    if not put_connection(http, o, o.events_connection_id,
+                          events_connection_body(o)):
         return 1
     if not put_connection(http, o):
         return 1

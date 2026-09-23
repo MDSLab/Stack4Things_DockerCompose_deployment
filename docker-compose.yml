@@ -384,6 +384,18 @@ services:
         echo '[ERROR] Keystone non risponde su :5000 dopo 120s. La creazione dei servizi fallirà.';
       fi;
 
+      # Where the PUBLIC iot endpoint should point. Defaults to the conductor,
+      # so the plain stack is unchanged. The audit overlay sets this to the
+      # audit proxy, which is how the proxy gets into Horizon's path: Horizon
+      # holds no conductor URL, it resolves the service through this catalog.
+      #
+      # This is deliberately decided HERE rather than by the proxy itself. The
+      # proxy sits in the request path of every operator action, and writing
+      # the catalog needs admin rights, so putting the two together would give
+      # the most exposed component the ability to rewrite service discovery.
+      # Keystone already holds these credentials and already owns the catalog.
+      PUBLIC_IOT_URL=\"$${IOT_PUBLIC_ENDPOINT_URL:-http://iotronic-conductor:8812}\";
+
       echo '[INFO] Creazione dei servizi di Iotronic...';
       if ! su -s /bin/sh -c 'openstack service list --format value -c Type' keystone | grep -q '^iot$'; then
         su -s /bin/sh -c 'openstack project create --domain default --description \"Service Project\" service' keystone;
@@ -400,12 +412,31 @@ services:
         su -s /bin/sh -c 'openstack role add --project admin --user admin admin_iot_project' keystone;
 
         echo '[INFO] Iotronic endpoints...';
-        su -s /bin/sh -c 'openstack endpoint create --region RegionOne iot public http://iotronic-conductor:8812' keystone;
+        su -s /bin/sh -c \"openstack endpoint create --region RegionOne iot public $$PUBLIC_IOT_URL\" keystone;
         su -s /bin/sh -c 'openstack endpoint create --region RegionOne iot internal http://iotronic-conductor:8812' keystone;
         su -s /bin/sh -c 'openstack endpoint create --region RegionOne iot admin http://iotronic-conductor:8812' keystone;
         echo '[INFO] Comandi di creazione Iotronic eseguiti.';
       else
         echo '[INFO] Iotronic service already exists, skipping creation.';
+      fi;
+
+      # RECONCILE the public endpoint on EVERY boot, not only on first
+      # creation. The block above is skipped once the iot service exists, so
+      # without this, changing IOT_PUBLIC_ENDPOINT_URL on an existing
+      # deployment would silently do nothing: the catalog keeps its old value,
+      # Horizon keeps bypassing the proxy, and the proxy keeps reporting
+      # healthy while recording no operator action at all.
+      echo '[INFO] Riconciliazione endpoint pubblico iot...';
+      EP_ID=$$(su -s /bin/sh -c 'openstack endpoint list --service iot --interface public -f value -c ID' keystone 2>/dev/null | tr -d '\r');
+      EP_URL=$$(su -s /bin/sh -c 'openstack endpoint list --service iot --interface public -f value -c URL' keystone 2>/dev/null | tr -d '\r');
+      if [ -z \"$$EP_ID\" ]; then
+        echo '[WARN] nessun endpoint pubblico iot da riconciliare.';
+      elif [ \"$$EP_URL\" = \"$$PUBLIC_IOT_URL\" ]; then
+        echo \"[INFO] endpoint pubblico iot gia corretto: $$PUBLIC_IOT_URL\";
+      else
+        su -s /bin/sh -c \"openstack endpoint set $$EP_ID --url $$PUBLIC_IOT_URL\" keystone;
+        echo \"[INFO] endpoint pubblico iot: $$EP_URL -> $$PUBLIC_IOT_URL\";
+        echo '[INFO] Horizon rilegge il catalogo solo con un nuovo token: fare logout e login.';
       fi;
 
       # The creates above are not error checked individually, so verify the
