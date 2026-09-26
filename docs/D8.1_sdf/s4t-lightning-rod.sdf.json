@@ -1,0 +1,513 @@
+{
+  "info": {
+    "title": "Stack4Things Lightning-Rod board",
+    "version": "2026-09-26",
+    "description": "SDF (RFC 9880) model of a board managed by Stack4Things/IoTronic through the Lightning-Rod agent: identity and status, device management, plugin and service management, and the telemetry exchanged with its digital twin.",
+    "modified": "2026-09-26T00:00:00Z",
+    "copyright": "Copyright 2026 University of Messina (SMART-E project)",
+    "license": "Apache-2.0"
+  },
+  "namespace": {
+    "s4t": "https://github.com/MDSLab/Stack4Things_DockerCompose_deployment/sdf"
+  },
+  "defaultNamespace": "s4t",
+  "sdfData": {
+    "Uuid": {
+      "type": "string",
+      "format": "uuid",
+      "label": "UUID",
+      "description": "Canonical identifier used by IoTronic, the digital twin (s4t:<uuid>) and the audit log."
+    },
+    "Timestamp": {
+      "type": "string",
+      "format": "date-time",
+      "description": "RFC 3339 UTC timestamp, e.g. 2026-09-10T12:34:56Z."
+    },
+    "BoardStatus": {
+      "type": "string",
+      "enum": [
+        "registered",
+        "online",
+        "offline"
+      ],
+      "description": "registered: created, agent never connected; online: agent connected; offline: agent disconnected."
+    },
+    "Location": {
+      "type": "object",
+      "description": "Declared position of the board.",
+      "properties": {
+        "latitude": {
+          "type": "number",
+          "unit": "lat",
+          "minimum": -90,
+          "maximum": 90
+        },
+        "longitude": {
+          "type": "number",
+          "unit": "lon",
+          "minimum": -180,
+          "maximum": 180
+        },
+        "altitude": {
+          "type": "number",
+          "unit": "m"
+        }
+      },
+      "required": [
+        "latitude",
+        "longitude",
+        "altitude"
+      ]
+    },
+    "ActionResult": {
+      "type": "object",
+      "description": "Outcome of an action dispatched to the board, as stored by IoTronic in the results table.",
+      "properties": {
+        "result": {
+          "type": "string",
+          "description": "outcome reported by the agent (results.result)"
+        },
+        "message": {
+          "type": "string",
+          "description": "response payload or error text (results.message)"
+        },
+        "requestUuid": {
+          "type": "string",
+          "format": "uuid",
+          "description": "IoTronic request that produced this result"
+        }
+      },
+      "required": [
+        "result"
+      ]
+    },
+    "ActionParameters": {
+      "type": "object",
+      "description": "Action-specific parameters, passed to the agent unchanged. IoTronic does not constrain their shape."
+    }
+  },
+  "sdfThing": {
+    "LightningRodBoard": {
+      "label": "Lightning-Rod board",
+      "description": "One IoT device registered in IoTronic and running the Lightning-Rod agent.",
+      "sdfRequired": [
+        "#/sdfThing/LightningRodBoard/sdfObject/BoardIdentity",
+        "#/sdfThing/LightningRodBoard/sdfObject/DeviceManager",
+        "#/sdfThing/LightningRodBoard/sdfObject/Telemetry"
+      ],
+      "sdfObject": {
+        "BoardIdentity": {
+          "label": "Board identity and status",
+          "description": "Registry data of the board, owned by IoTronic (boards table) and copied into the twin attributes.",
+          "sdfProperty": {
+            "uuid": {
+              "sdfRef": "#/sdfData/Uuid",
+              "readable": true,
+              "writable": false,
+              "observable": false
+            },
+            "code": {
+              "type": "string",
+              "maxLength": 36,
+              "readable": true,
+              "writable": false,
+              "observable": false,
+              "description": "Registration code the agent presents on first connection."
+            },
+            "name": {
+              "type": "string",
+              "maxLength": 255,
+              "readable": true,
+              "writable": true,
+              "observable": true
+            },
+            "boardType": {
+              "type": "string",
+              "maxLength": 255,
+              "readable": true,
+              "writable": false,
+              "observable": false,
+              "description": "Device type, e.g. gateway."
+            },
+            "status": {
+              "sdfRef": "#/sdfData/BoardStatus",
+              "readable": true,
+              "writable": false,
+              "observable": true
+            },
+            "lrVersion": {
+              "type": "string",
+              "maxLength": 20,
+              "readable": true,
+              "writable": false,
+              "observable": true,
+              "nullable": true,
+              "description": "Lightning-Rod version; set only once an agent has connected."
+            },
+            "mobile": {
+              "type": "boolean",
+              "readable": true,
+              "writable": true,
+              "observable": false
+            },
+            "location": {
+              "sdfRef": "#/sdfData/Location",
+              "readable": true,
+              "writable": true,
+              "observable": false
+            },
+            "fleet": {
+              "sdfRef": "#/sdfData/Uuid",
+              "readable": true,
+              "writable": true,
+              "observable": false,
+              "nullable": true
+            },
+            "project": {
+              "sdfRef": "#/sdfData/Uuid",
+              "readable": true,
+              "writable": false,
+              "observable": false,
+              "description": "Owning Keystone project."
+            }
+          },
+          "sdfEvent": {
+            "StatusChanged": {
+              "description": "The board changed status (e.g. registered to online when the agent connects).",
+              "sdfOutputData": {
+                "sdfRef": "#/sdfData/BoardStatus"
+              }
+            }
+          },
+          "sdfRequired": [
+            "#/sdfThing/LightningRodBoard/sdfObject/BoardIdentity/sdfProperty/uuid",
+            "#/sdfThing/LightningRodBoard/sdfObject/BoardIdentity/sdfProperty/status"
+          ]
+        },
+        "DeviceManager": {
+          "label": "Device management",
+          "description": "Built-in board actions (Board.ACTIONS in IoTronic), executed by the agent's DeviceManager.",
+          "sdfAction": {
+            "DevicePing": {
+              "description": "Liveness check of the agent.",
+              "sdfOutputData": {
+                "sdfRef": "#/sdfData/ActionResult"
+              }
+            },
+            "DeviceEcho": {
+              "description": "Returns the given parameters.",
+              "sdfInputData": {
+                "sdfRef": "#/sdfData/ActionParameters"
+              },
+              "sdfOutputData": {
+                "sdfRef": "#/sdfData/ActionResult"
+              }
+            },
+            "DeviceReboot": {
+              "description": "Reboots the device.",
+              "sdfInputData": {
+                "sdfRef": "#/sdfData/ActionParameters"
+              },
+              "sdfOutputData": {
+                "sdfRef": "#/sdfData/ActionResult"
+              }
+            },
+            "DeviceRestartLR": {
+              "description": "Restarts the Lightning-Rod agent.",
+              "sdfOutputData": {
+                "sdfRef": "#/sdfData/ActionResult"
+              }
+            },
+            "DeviceNetConfig": {
+              "description": "Applies a network configuration.",
+              "sdfInputData": {
+                "sdfRef": "#/sdfData/ActionParameters"
+              },
+              "sdfOutputData": {
+                "sdfRef": "#/sdfData/ActionResult"
+              }
+            },
+            "DeviceUpgradeLR": {
+              "description": "Upgrades the Lightning-Rod agent.",
+              "sdfInputData": {
+                "sdfRef": "#/sdfData/ActionParameters"
+              },
+              "sdfOutputData": {
+                "sdfRef": "#/sdfData/ActionResult"
+              }
+            },
+            "DevicePkgOperation": {
+              "description": "Installs, removes or updates an OS package.",
+              "sdfInputData": {
+                "sdfRef": "#/sdfData/ActionParameters"
+              },
+              "sdfOutputData": {
+                "sdfRef": "#/sdfData/ActionResult"
+              }
+            },
+            "DeviceRestSubmit": {
+              "description": "Submits a REST call from the device.",
+              "sdfInputData": {
+                "sdfRef": "#/sdfData/ActionParameters"
+              },
+              "sdfOutputData": {
+                "sdfRef": "#/sdfData/ActionResult"
+              }
+            }
+          }
+        },
+        "PluginManager": {
+          "label": "Plugin management",
+          "description": "Injectable code executed by the agent's PluginManager.",
+          "sdfProperty": {
+            "injectedPlugins": {
+              "type": "array",
+              "readable": true,
+              "writable": false,
+              "observable": false,
+              "description": "Plugins deployed on this board (injection_plugins).",
+              "items": {
+                "type": "object",
+                "properties": {
+                  "plugin": {
+                    "type": "string",
+                    "format": "uuid"
+                  },
+                  "onboot": {
+                    "type": "boolean"
+                  },
+                  "status": {
+                    "type": "string"
+                  }
+                }
+              }
+            }
+          },
+          "sdfAction": {
+            "PluginInject": {
+              "description": "Deploys a plugin on the board.",
+              "sdfInputData": {
+                "type": "object",
+                "properties": {
+                  "plugin": {
+                    "type": "string",
+                    "format": "uuid"
+                  },
+                  "onboot": {
+                    "type": "boolean",
+                    "default": false
+                  }
+                },
+                "required": [
+                  "plugin"
+                ]
+              },
+              "sdfOutputData": {
+                "sdfRef": "#/sdfData/ActionResult"
+              }
+            },
+            "PluginStart": {
+              "description": "Starts an injected plugin.",
+              "sdfInputData": {
+                "sdfRef": "#/sdfData/ActionParameters"
+              },
+              "sdfOutputData": {
+                "sdfRef": "#/sdfData/ActionResult"
+              }
+            },
+            "PluginStop": {
+              "description": "Stops a running plugin.",
+              "sdfInputData": {
+                "type": "object",
+                "properties": {
+                  "delay": {
+                    "type": "integer",
+                    "unit": "s",
+                    "minimum": 0
+                  }
+                }
+              },
+              "sdfOutputData": {
+                "sdfRef": "#/sdfData/ActionResult"
+              }
+            },
+            "PluginCall": {
+              "description": "Runs a callable plugin once.",
+              "sdfInputData": {
+                "sdfRef": "#/sdfData/ActionParameters"
+              },
+              "sdfOutputData": {
+                "sdfRef": "#/sdfData/ActionResult"
+              }
+            },
+            "PluginReboot": {
+              "description": "Restarts a plugin.",
+              "sdfInputData": {
+                "sdfRef": "#/sdfData/ActionParameters"
+              },
+              "sdfOutputData": {
+                "sdfRef": "#/sdfData/ActionResult"
+              }
+            },
+            "PluginStatus": {
+              "description": "Reports the plugin state.",
+              "sdfOutputData": {
+                "sdfRef": "#/sdfData/ActionResult"
+              }
+            },
+            "PluginRemove": {
+              "description": "Removes a plugin from the board.",
+              "sdfOutputData": {
+                "sdfRef": "#/sdfData/ActionResult"
+              }
+            }
+          }
+        },
+        "ServiceManager": {
+          "label": "Service exposure",
+          "description": "Local services exposed through a WStun tunnel by the agent's ServiceManager.",
+          "sdfProperty": {
+            "exposedServices": {
+              "type": "array",
+              "readable": true,
+              "writable": false,
+              "observable": true,
+              "description": "Services currently exposed (exposed_services).",
+              "items": {
+                "type": "object",
+                "properties": {
+                  "service": {
+                    "type": "string",
+                    "format": "uuid"
+                  },
+                  "name": {
+                    "type": "string"
+                  },
+                  "localPort": {
+                    "type": "integer",
+                    "minimum": 1,
+                    "maximum": 65535
+                  },
+                  "protocol": {
+                    "type": "string"
+                  },
+                  "publicPort": {
+                    "type": "integer",
+                    "minimum": 1,
+                    "maximum": 65535
+                  }
+                }
+              }
+            }
+          },
+          "sdfAction": {
+            "ServiceEnable": {
+              "description": "Exposes a service on a public tunnel port.",
+              "sdfInputData": {
+                "type": "object",
+                "properties": {
+                  "service": {
+                    "type": "string",
+                    "format": "uuid"
+                  }
+                },
+                "required": [
+                  "service"
+                ]
+              },
+              "sdfOutputData": {
+                "sdfRef": "#/sdfData/ActionResult"
+              }
+            },
+            "ServiceDisable": {
+              "description": "Closes the tunnel of a service.",
+              "sdfInputData": {
+                "type": "object",
+                "properties": {
+                  "service": {
+                    "type": "string",
+                    "format": "uuid"
+                  }
+                },
+                "required": [
+                  "service"
+                ]
+              },
+              "sdfOutputData": {
+                "sdfRef": "#/sdfData/ActionResult"
+              }
+            },
+            "ServiceRestore": {
+              "description": "Re-applies every exposure recorded for the board.",
+              "sdfOutputData": {
+                "sdfRef": "#/sdfData/ActionResult"
+              }
+            },
+            "ServicesStatus": {
+              "description": "Reports the status of every exposed service.",
+              "sdfOutputData": {
+                "sdfRef": "#/sdfData/ActionResult"
+              }
+            }
+          }
+        },
+        "Telemetry": {
+          "label": "Telemetry and desired state",
+          "description": "Measured state reported by the device and desired state set by an operator, mirrored in the digital twin feature 'telemetry'. The properties below are the reference profile; device types extend it (see the data plan specification, Section 6).",
+          "sdfProperty": {
+            "temperature": {
+              "type": "number",
+              "unit": "Cel",
+              "readable": true,
+              "writable": false,
+              "observable": true,
+              "description": "Device temperature."
+            },
+            "fan_on": {
+              "type": "boolean",
+              "readable": true,
+              "writable": true,
+              "observable": true,
+              "description": "Cooling fan state; writable through the twin's desired properties."
+            }
+          },
+          "sdfEvent": {
+            "Report": {
+              "description": "One telemetry report: the device's current state (partial updates allowed).",
+              "sdfOutputData": {
+                "type": "object",
+                "properties": {
+                  "board_uuid": {
+                    "type": "string",
+                    "format": "uuid"
+                  },
+                  "state": {
+                    "type": "object",
+                    "description": "property name -> value, a subset of the sdfProperty set of this object"
+                  },
+                  "ts": {
+                    "type": "string",
+                    "format": "date-time"
+                  }
+                },
+                "required": [
+                  "board_uuid",
+                  "state"
+                ]
+              }
+            }
+          },
+          "sdfAction": {
+            "Apply": {
+              "description": "Applies the difference between desired and reported state. Delivered with retain, so a board that reconnects receives the last command.",
+              "sdfInputData": {
+                "type": "object",
+                "description": "property name -> desired value, only for properties that differ"
+              }
+            }
+          }
+        }
+      }
+    }
+  }
+}

@@ -1,0 +1,186 @@
+{
+  "info": {
+    "title": "Stack4Things protocol binding for the Lightning-Rod board model",
+    "version": "2026-09-26",
+    "description": "Maps each affordance of s4t-lightning-rod.sdf.json to the Stack4Things interface that carries it: IoTronic REST (through the audit proxy), WAMP RPC or topic on realm s4t, digital-twin path in Eclipse Ditto, audit machine_action."
+  },
+  "namespace": {
+    "s4t": "https://github.com/MDSLab/Stack4Things_DockerCompose_deployment/sdf"
+  },
+  "defaultNamespace": "s4t",
+  "map": {
+    "#/sdfThing/LightningRodBoard/sdfObject/BoardIdentity/sdfProperty/uuid": {
+      "s4t:rest": "GET /v1/boards/{uuid}",
+      "s4t:dbColumn": "iotronic.boards.uuid",
+      "s4t:dittoPath": "/thingId (s4t:<uuid>)"
+    },
+    "#/sdfThing/LightningRodBoard/sdfObject/BoardIdentity/sdfProperty/code": {
+      "s4t:rest": "GET /v1/boards/{uuid}",
+      "s4t:dbColumn": "iotronic.boards.code"
+    },
+    "#/sdfThing/LightningRodBoard/sdfObject/BoardIdentity/sdfProperty/name": {
+      "s4t:rest": "GET /v1/boards/{uuid}; PATCH /v1/boards/{uuid}",
+      "s4t:dbColumn": "iotronic.boards.name",
+      "s4t:dittoPath": "/attributes/boardName"
+    },
+    "#/sdfThing/LightningRodBoard/sdfObject/BoardIdentity/sdfProperty/boardType": {
+      "s4t:rest": "GET /v1/boards/{uuid}",
+      "s4t:dbColumn": "iotronic.boards.type",
+      "s4t:dittoPath": "/attributes/boardType"
+    },
+    "#/sdfThing/LightningRodBoard/sdfObject/BoardIdentity/sdfProperty/status": {
+      "s4t:rest": "GET /v1/boards/{uuid}",
+      "s4t:dbColumn": "iotronic.boards.status",
+      "s4t:dittoPath": "/attributes/status"
+    },
+    "#/sdfThing/LightningRodBoard/sdfObject/BoardIdentity/sdfProperty/lrVersion": {
+      "s4t:rest": "GET /v1/boards/{uuid}",
+      "s4t:dbColumn": "iotronic.boards.lr_version",
+      "s4t:dittoPath": "/attributes/lrVersion"
+    },
+    "#/sdfThing/LightningRodBoard/sdfObject/BoardIdentity/sdfProperty/mobile": {
+      "s4t:rest": "GET /v1/boards/{uuid}; PATCH /v1/boards/{uuid}",
+      "s4t:dbColumn": "iotronic.boards.mobile",
+      "s4t:dittoPath": "/attributes/mobile"
+    },
+    "#/sdfThing/LightningRodBoard/sdfObject/BoardIdentity/sdfProperty/location": {
+      "s4t:rest": "GET /v1/boards/{uuid}; PATCH /v1/boards/{uuid}",
+      "s4t:dbColumn": "iotronic.locations"
+    },
+    "#/sdfThing/LightningRodBoard/sdfObject/BoardIdentity/sdfProperty/fleet": {
+      "s4t:rest": "GET /v1/boards/{uuid}; PATCH /v1/boards/{uuid}",
+      "s4t:dbColumn": "iotronic.boards.fleet",
+      "s4t:dittoPath": "/attributes/fleet"
+    },
+    "#/sdfThing/LightningRodBoard/sdfObject/BoardIdentity/sdfProperty/project": {
+      "s4t:rest": "GET /v1/boards/{uuid}",
+      "s4t:dbColumn": "iotronic.boards.project",
+      "s4t:dittoPath": "/attributes/project"
+    },
+    "#/sdfThing/LightningRodBoard/sdfObject/BoardIdentity/sdfEvent/StatusChanged": {
+      "s4t:dittoPath": "/attributes/status",
+      "s4t:note": "observed by the provisioner every 30 s"
+    },
+    "#/sdfThing/LightningRodBoard/sdfObject/DeviceManager/sdfAction/DevicePing": {
+      "s4t:rest": "POST /v1/boards/{uuid}/action {action: 'DevicePing', parameters}",
+      "s4t:wampRpc": "DevicePing",
+      "s4t:auditAction": "board.action"
+    },
+    "#/sdfThing/LightningRodBoard/sdfObject/DeviceManager/sdfAction/DeviceEcho": {
+      "s4t:rest": "POST /v1/boards/{uuid}/action {action: 'DeviceEcho', parameters}",
+      "s4t:wampRpc": "DeviceEcho",
+      "s4t:auditAction": "board.action"
+    },
+    "#/sdfThing/LightningRodBoard/sdfObject/DeviceManager/sdfAction/DeviceReboot": {
+      "s4t:rest": "POST /v1/boards/{uuid}/action {action: 'DeviceReboot', parameters}",
+      "s4t:wampRpc": "DeviceReboot",
+      "s4t:auditAction": "board.action"
+    },
+    "#/sdfThing/LightningRodBoard/sdfObject/DeviceManager/sdfAction/DeviceRestartLR": {
+      "s4t:rest": "POST /v1/boards/{uuid}/action {action: 'DeviceRestartLR', parameters}",
+      "s4t:wampRpc": "DeviceRestartLR",
+      "s4t:auditAction": "board.action"
+    },
+    "#/sdfThing/LightningRodBoard/sdfObject/DeviceManager/sdfAction/DeviceNetConfig": {
+      "s4t:rest": "POST /v1/boards/{uuid}/action {action: 'DeviceNetConfig', parameters}",
+      "s4t:wampRpc": "DeviceNetConfig",
+      "s4t:auditAction": "board.action"
+    },
+    "#/sdfThing/LightningRodBoard/sdfObject/DeviceManager/sdfAction/DeviceUpgradeLR": {
+      "s4t:rest": "POST /v1/boards/{uuid}/action {action: 'DeviceUpgradeLR', parameters}",
+      "s4t:wampRpc": "DeviceUpgradeLR",
+      "s4t:auditAction": "board.action"
+    },
+    "#/sdfThing/LightningRodBoard/sdfObject/DeviceManager/sdfAction/DevicePkgOperation": {
+      "s4t:rest": "POST /v1/boards/{uuid}/action {action: 'DevicePkgOperation', parameters}",
+      "s4t:wampRpc": "DevicePkgOperation",
+      "s4t:auditAction": "board.action"
+    },
+    "#/sdfThing/LightningRodBoard/sdfObject/DeviceManager/sdfAction/DeviceRestSubmit": {
+      "s4t:rest": "POST /v1/boards/{uuid}/action {action: 'DeviceRestSubmit', parameters}",
+      "s4t:wampRpc": "DeviceRestSubmit",
+      "s4t:auditAction": "board.action"
+    },
+    "#/sdfThing/LightningRodBoard/sdfObject/PluginManager/sdfAction/PluginInject": {
+      "s4t:rest": "PUT /v1/boards/{uuid}/plugins",
+      "s4t:wampRpc": "PluginInject",
+      "s4t:auditAction": "plugin.inject"
+    },
+    "#/sdfThing/LightningRodBoard/sdfObject/PluginManager/sdfAction/PluginStart": {
+      "s4t:rest": "POST /v1/boards/{uuid}/plugins/{plugin}",
+      "s4t:wampRpc": "PluginStart",
+      "s4t:auditAction": "plugin.execute"
+    },
+    "#/sdfThing/LightningRodBoard/sdfObject/PluginManager/sdfAction/PluginStop": {
+      "s4t:rest": "POST /v1/boards/{uuid}/plugins/{plugin}",
+      "s4t:wampRpc": "PluginStop",
+      "s4t:auditAction": "plugin.execute"
+    },
+    "#/sdfThing/LightningRodBoard/sdfObject/PluginManager/sdfAction/PluginCall": {
+      "s4t:rest": "POST /v1/boards/{uuid}/plugins/{plugin}",
+      "s4t:wampRpc": "PluginCall",
+      "s4t:auditAction": "plugin.execute"
+    },
+    "#/sdfThing/LightningRodBoard/sdfObject/PluginManager/sdfAction/PluginReboot": {
+      "s4t:rest": "POST /v1/boards/{uuid}/plugins/{plugin}",
+      "s4t:wampRpc": "PluginReboot",
+      "s4t:auditAction": "plugin.execute"
+    },
+    "#/sdfThing/LightningRodBoard/sdfObject/PluginManager/sdfAction/PluginStatus": {
+      "s4t:rest": "POST /v1/boards/{uuid}/plugins/{plugin}",
+      "s4t:wampRpc": "PluginStatus",
+      "s4t:auditAction": "plugin.execute"
+    },
+    "#/sdfThing/LightningRodBoard/sdfObject/PluginManager/sdfAction/PluginRemove": {
+      "s4t:rest": "DELETE /v1/boards/{uuid}/plugins/{plugin}",
+      "s4t:wampRpc": "PluginRemove",
+      "s4t:auditAction": "plugin.remove"
+    },
+    "#/sdfThing/LightningRodBoard/sdfObject/PluginManager/sdfProperty/injectedPlugins": {
+      "s4t:rest": "GET /v1/boards/{uuid}/plugins",
+      "s4t:dbColumn": "iotronic.injection_plugins"
+    },
+    "#/sdfThing/LightningRodBoard/sdfObject/ServiceManager/sdfAction/ServiceEnable": {
+      "s4t:rest": "POST /v1/boards/{uuid}/services/{service}/action {action: 'ServiceEnable'}",
+      "s4t:wampRpc": "ServiceEnable",
+      "s4t:auditAction": "service.expose"
+    },
+    "#/sdfThing/LightningRodBoard/sdfObject/ServiceManager/sdfAction/ServiceDisable": {
+      "s4t:rest": "POST /v1/boards/{uuid}/services/{service}/action {action: 'ServiceDisable'}",
+      "s4t:wampRpc": "ServiceDisable",
+      "s4t:auditAction": "service.expose (see Section 5.3)"
+    },
+    "#/sdfThing/LightningRodBoard/sdfObject/ServiceManager/sdfAction/ServiceRestore": {
+      "s4t:rest": "GET /v1/boards/{uuid}/services/restore",
+      "s4t:wampRpc": "ServiceRestore",
+      "s4t:auditAction": "service.read"
+    },
+    "#/sdfThing/LightningRodBoard/sdfObject/ServiceManager/sdfAction/ServicesStatus": {
+      "s4t:rest": "GET /v1/boards/{uuid}/services/status",
+      "s4t:wampRpc": "ServicesStatus",
+      "s4t:auditAction": "service.read"
+    },
+    "#/sdfThing/LightningRodBoard/sdfObject/ServiceManager/sdfProperty/exposedServices": {
+      "s4t:rest": "GET /v1/boards/{uuid}/services",
+      "s4t:dbColumn": "iotronic.exposed_services"
+    },
+    "#/sdfThing/LightningRodBoard/sdfObject/Telemetry/sdfProperty/temperature": {
+      "s4t:dittoPath": "/features/telemetry/properties/temperature"
+    },
+    "#/sdfThing/LightningRodBoard/sdfObject/Telemetry/sdfProperty/fan_on": {
+      "s4t:dittoPath": "/features/telemetry/properties/fan_on (desired: /features/telemetry/desiredProperties/fan_on)"
+    },
+    "#/sdfThing/LightningRodBoard/sdfObject/Telemetry/sdfEvent/Report": {
+      "s4t:wampTopic": "s4t.telemetry.{uuid}.report",
+      "s4t:amqpQueue": "ditto.inbound",
+      "s4t:dittoPath": "/features/telemetry/properties (merge)",
+      "s4t:auditAction": "telemetry.report"
+    },
+    "#/sdfThing/LightningRodBoard/sdfObject/Telemetry/sdfAction/Apply": {
+      "s4t:wampTopic": "s4t.command.{uuid}.apply (retain)",
+      "s4t:amqpQueue": "ditto.commands",
+      "s4t:dittoPath": "/features/telemetry/desiredProperties",
+      "s4t:auditAction": "desired.set"
+    }
+  }
+}

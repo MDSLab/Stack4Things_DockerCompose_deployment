@@ -1,0 +1,233 @@
+{
+  "info": {
+    "title": "Stack4Things binding of the IoTronic control-plane model",
+    "version": "2026-09-26",
+    "description": "Maps each affordance of s4t-iotronic-control.sdf.json to REST routes, Keystone policy rules, conductor RPC methods, WAMP procedures, database state, twin paths and audit actions."
+  },
+  "namespace": {
+    "s4t": "https://github.com/MDSLab/Stack4Things_DockerCompose_deployment/sdf"
+  },
+  "defaultNamespace": "s4t",
+  "map": {
+    "#/sdfThing/IoTronicControlPlane/sdfObject/Identity/sdfAction/IssueToken": {
+      "s4t:rest": "POST /v3/auth/tokens (Keystone :5000)",
+      "s4t:policy": "none (credentials)"
+    },
+    "#/sdfThing/IoTronicControlPlane/sdfObject/Identity/sdfProperty/iotPublicEndpoint": {
+      "s4t:rest": "GET /v3/endpoints?interface=public (service iot)",
+      "s4t:note": "set by Keystone at start from IOT_PUBLIC_ENDPOINT_URL"
+    },
+    "#/sdfThing/IoTronicControlPlane/sdfObject/BoardRegistry/sdfAction/CreateBoard": {
+      "s4t:rest": "POST /v1/boards",
+      "s4t:policy": "iot:board:create",
+      "s4t:conductorRpc": "create_board",
+      "s4t:auditAction": "board.create"
+    },
+    "#/sdfThing/IoTronicControlPlane/sdfObject/BoardRegistry/sdfAction/UpdateBoard": {
+      "s4t:rest": "PATCH /v1/boards/{board}",
+      "s4t:policy": "iot:board:update",
+      "s4t:conductorRpc": "update_board",
+      "s4t:auditAction": "board.update"
+    },
+    "#/sdfThing/IoTronicControlPlane/sdfObject/BoardRegistry/sdfAction/DeleteBoard": {
+      "s4t:rest": "DELETE /v1/boards/{board}",
+      "s4t:policy": "iot:board:delete",
+      "s4t:conductorRpc": "destroy_board",
+      "s4t:auditAction": "board.delete"
+    },
+    "#/sdfThing/IoTronicControlPlane/sdfObject/BoardRegistry/sdfAction/ListBoards": {
+      "s4t:rest": "GET /v1/boards",
+      "s4t:policy": "iot:board:get",
+      "s4t:auditAction": "board.read (if AUDIT_RECORD_READS=1)"
+    },
+    "#/sdfThing/IoTronicControlPlane/sdfObject/BoardRegistry/sdfEvent/BoardStatusChanged": {
+      "s4t:wampTopic": "wamp.session.on_join / wamp.session.on_leave (subscribed by the WAMP agent)",
+      "s4t:dbColumn": "iotronic.boards.status, iotronic.sessions.valid",
+      "s4t:dittoPath": "/attributes/status (next provisioner pass)"
+    },
+    "#/sdfThing/IoTronicControlPlane/sdfObject/AgentSession/sdfAction/Register": {
+      "s4t:wampRpc": "stack4things.register",
+      "s4t:conductorRpc": "registration"
+    },
+    "#/sdfThing/IoTronicControlPlane/sdfObject/AgentSession/sdfAction/Connect": {
+      "s4t:wampRpc": "<agent>.stack4things.connection",
+      "s4t:dbColumn": "iotronic.sessions, iotronic.boards.status/lr_version/connectivity"
+    },
+    "#/sdfThing/IoTronicControlPlane/sdfObject/AgentSession/sdfAction/NotifyResult": {
+      "s4t:wampRpc": "<agent>.stack4things.notify_result",
+      "s4t:dbColumn": "iotronic.results, iotronic.requests.status"
+    },
+    "#/sdfThing/IoTronicControlPlane/sdfObject/AgentSession/sdfAction/Alive": {
+      "s4t:wampRpc": "<agent>.stack4things.alive"
+    },
+    "#/sdfThing/IoTronicControlPlane/sdfObject/AgentSession/sdfProperty/activeSessions": {
+      "s4t:dbColumn": "iotronic.sessions (valid = 1)"
+    },
+    "#/sdfThing/IoTronicControlPlane/sdfObject/BoardOperations/sdfAction/ExecuteBoardAction": {
+      "s4t:rest": "POST /v1/boards/{board}/action",
+      "s4t:policy": "iot:board_action:post",
+      "s4t:conductorRpc": "action_board \u2192 execute_on_board",
+      "s4t:wampRpc": "iotronic.<session>.<board>.<action> (via wagent s4t_invoke_wamp)",
+      "s4t:auditAction": "board.action"
+    },
+    "#/sdfThing/IoTronicControlPlane/sdfObject/PluginCatalog/sdfAction/CreatePlugin": {
+      "s4t:rest": "POST /v1/plugins",
+      "s4t:policy": "iot:plugin:create",
+      "s4t:conductorRpc": "create_plugin"
+    },
+    "#/sdfThing/IoTronicControlPlane/sdfObject/PluginCatalog/sdfAction/UpdatePlugin": {
+      "s4t:rest": "PATCH /v1/plugins/{plugin}",
+      "s4t:policy": "iot:plugin:update",
+      "s4t:conductorRpc": "update_plugin"
+    },
+    "#/sdfThing/IoTronicControlPlane/sdfObject/PluginCatalog/sdfAction/DeletePlugin": {
+      "s4t:rest": "DELETE /v1/plugins/{plugin}",
+      "s4t:policy": "iot:plugin:delete",
+      "s4t:conductorRpc": "destroy_plugin"
+    },
+    "#/sdfThing/IoTronicControlPlane/sdfObject/PluginCatalog/sdfAction/ListPlugins": {
+      "s4t:rest": "GET /v1/plugins (/public)",
+      "s4t:policy": "iot:plugin:get"
+    },
+    "#/sdfThing/IoTronicControlPlane/sdfObject/PluginDeployment/sdfAction/InjectPlugin": {
+      "s4t:rest": "PUT /v1/boards/{board}/plugins",
+      "s4t:policy": "iot:plugin_inject:put",
+      "s4t:conductorRpc": "inject_plugin",
+      "s4t:wampRpc": "iotronic.<session>.<board>.PluginInject",
+      "s4t:auditAction": "plugin.inject (intended; see open items)"
+    },
+    "#/sdfThing/IoTronicControlPlane/sdfObject/PluginDeployment/sdfAction/ExecutePluginAction": {
+      "s4t:rest": "POST /v1/boards/{board}/plugins/{plugin}",
+      "s4t:policy": "iot:plugin_action:post",
+      "s4t:conductorRpc": "action_plugin",
+      "s4t:wampRpc": "iotronic.<session>.<board>.<PluginAction>",
+      "s4t:auditAction": "plugin.execute (intended; see open items)"
+    },
+    "#/sdfThing/IoTronicControlPlane/sdfObject/PluginDeployment/sdfAction/RemovePlugin": {
+      "s4t:rest": "DELETE /v1/boards/{board}/plugins/{plugin}",
+      "s4t:policy": "iot:plugin_remove:delete",
+      "s4t:conductorRpc": "remove_plugin",
+      "s4t:wampRpc": "iotronic.<session>.<board>.PluginRemove",
+      "s4t:auditAction": "plugin.remove"
+    },
+    "#/sdfThing/IoTronicControlPlane/sdfObject/ServiceCatalog/sdfAction/CreateService": {
+      "s4t:rest": "POST /v1/services",
+      "s4t:policy": "iot:service:create",
+      "s4t:conductorRpc": "create_service"
+    },
+    "#/sdfThing/IoTronicControlPlane/sdfObject/ServiceCatalog/sdfAction/UpdateService": {
+      "s4t:rest": "PATCH /v1/services/{service}",
+      "s4t:policy": "iot:service:update",
+      "s4t:conductorRpc": "update_service"
+    },
+    "#/sdfThing/IoTronicControlPlane/sdfObject/ServiceCatalog/sdfAction/DeleteService": {
+      "s4t:rest": "DELETE /v1/services/{service}",
+      "s4t:policy": "iot:service:delete",
+      "s4t:conductorRpc": "destroy_service"
+    },
+    "#/sdfThing/IoTronicControlPlane/sdfObject/ServiceExposure/sdfAction/ExecuteServiceAction": {
+      "s4t:rest": "POST /v1/boards/{board}/services/{service}/action",
+      "s4t:policy": "iot:service_action:post",
+      "s4t:conductorRpc": "action_service",
+      "s4t:wampRpc": "iotronic.<session>.<board>.<ServiceAction>",
+      "s4t:auditAction": "service.expose"
+    },
+    "#/sdfThing/IoTronicControlPlane/sdfObject/ServiceExposure/sdfAction/RestoreServices": {
+      "s4t:rest": "GET /v1/boards/{board}/services/restore",
+      "s4t:policy": "iot:service_action:post",
+      "s4t:conductorRpc": "restore_services_on_board",
+      "s4t:wampRpc": "iotronic.<session>.<board>.ServiceRestore"
+    },
+    "#/sdfThing/IoTronicControlPlane/sdfObject/WebServiceManagement/sdfAction/EnableWebServiceManager": {
+      "s4t:rest": "POST /v1/boards/{board}/webservices/enable",
+      "s4t:policy": "none: authenticated token only (check commented out in 0.4.17)",
+      "s4t:conductorRpc": "enable_webservice"
+    },
+    "#/sdfThing/IoTronicControlPlane/sdfObject/WebServiceManagement/sdfAction/DisableWebServiceManager": {
+      "s4t:rest": "DELETE /v1/boards/{board}/webservices/disable",
+      "s4t:policy": "none: authenticated token only (check commented out in 0.4.17)",
+      "s4t:conductorRpc": "disable_webservice"
+    },
+    "#/sdfThing/IoTronicControlPlane/sdfObject/WebServiceManagement/sdfAction/ExposeWebService": {
+      "s4t:rest": "PUT /v1/boards/{board}/webservices",
+      "s4t:policy": "iot:webservice:create",
+      "s4t:conductorRpc": "create_webservice"
+    },
+    "#/sdfThing/IoTronicControlPlane/sdfObject/WebServiceManagement/sdfAction/UnexposeWebService": {
+      "s4t:rest": "DELETE /v1/webservices/{webservice}",
+      "s4t:policy": "iot:webservice:delete",
+      "s4t:conductorRpc": "destroy_webservice"
+    },
+    "#/sdfThing/IoTronicControlPlane/sdfObject/PortManagement/sdfAction/AttachPort": {
+      "s4t:rest": "PUT /v1/boards/{board}/ports",
+      "s4t:policy": "none: authenticated token only (no check in 0.4.17)",
+      "s4t:conductorRpc": "create_port_on_board"
+    },
+    "#/sdfThing/IoTronicControlPlane/sdfObject/PortManagement/sdfAction/DetachPort": {
+      "s4t:rest": "DELETE /v1/boards/{board}/ports/{port}",
+      "s4t:policy": "none: authenticated token only (no check in 0.4.17)",
+      "s4t:conductorRpc": "remove_port_from_board"
+    },
+    "#/sdfThing/IoTronicControlPlane/sdfObject/FleetManagement/sdfAction/CreateFleet": {
+      "s4t:rest": "POST /v1/fleets",
+      "s4t:policy": "iot:fleet:create",
+      "s4t:conductorRpc": "create_fleet"
+    },
+    "#/sdfThing/IoTronicControlPlane/sdfObject/FleetManagement/sdfAction/UpdateFleet": {
+      "s4t:rest": "PATCH /v1/fleets/{fleet}",
+      "s4t:policy": "iot:fleet:update",
+      "s4t:conductorRpc": "update_fleet"
+    },
+    "#/sdfThing/IoTronicControlPlane/sdfObject/FleetManagement/sdfAction/DeleteFleet": {
+      "s4t:rest": "DELETE /v1/fleets/{fleet}",
+      "s4t:policy": "iot:fleet:delete",
+      "s4t:conductorRpc": "destroy_fleet"
+    },
+    "#/sdfThing/IoTronicControlPlane/sdfObject/FleetManagement/sdfAction/ListFleetBoards": {
+      "s4t:rest": "GET /v1/fleets/{fleet}/boards",
+      "s4t:policy": "iot:board:get"
+    },
+    "#/sdfThing/IoTronicControlPlane/sdfObject/RequestTracking/sdfAction/GetRequest": {
+      "s4t:rest": "GET /v1/requests/{request}",
+      "s4t:policy": "iot:request:get_one"
+    },
+    "#/sdfThing/IoTronicControlPlane/sdfObject/RequestTracking/sdfAction/ListResults": {
+      "s4t:rest": "GET /v1/requests/{request}/results",
+      "s4t:policy": "iot:result:get"
+    },
+    "#/sdfThing/IoTronicControlPlane/sdfObject/RequestTracking/sdfEvent/RequestCompleted": {
+      "s4t:dbColumn": "iotronic.requests.status (PENDING \u2192 COMPLETED)"
+    },
+    "#/sdfThing/IoTronicControlPlane/sdfObject/ScheduledActions/sdfAction/CreateSchedule": {
+      "s4t:rest": "POST /v1/boards/{board}/scheduled-actions"
+    },
+    "#/sdfThing/IoTronicControlPlane/sdfObject/ScheduledActions/sdfAction/UpdateSchedule": {
+      "s4t:rest": "PATCH /v1/boards/{board}/scheduled-actions/{schedule}"
+    },
+    "#/sdfThing/IoTronicControlPlane/sdfObject/ScheduledActions/sdfAction/DeleteSchedule": {
+      "s4t:rest": "DELETE /v1/boards/{board}/scheduled-actions/{schedule}"
+    },
+    "#/sdfThing/IoTronicControlPlane/sdfObject/ScheduledActions/sdfEvent/ScheduleFired": {
+      "s4t:dbColumn": "scheduled_actions.last_run_at, last_status, last_error"
+    },
+    "#/sdfThing/IoTronicControlPlane/sdfObject/TwinControl/sdfProperty/reconcileInterval": {
+      "s4t:note": "s4t-ditto-provisioner --interval"
+    },
+    "#/sdfThing/IoTronicControlPlane/sdfObject/TwinControl/sdfAction/SetDesiredState": {
+      "s4t:rest": "PUT /api/2/things/s4t:{board}/features/telemetry/desiredProperties (Ditto :8090)",
+      "s4t:dittoPath": "/features/telemetry/desiredProperties",
+      "s4t:auditAction": "desired.set"
+    },
+    "#/sdfThing/IoTronicControlPlane/sdfObject/TwinControl/sdfEvent/TwinProvisioned": {
+      "s4t:auditAction": "twin.create / twin.update",
+      "s4t:dittoPath": "/attributes, /attributes/provisioning/orphaned"
+    },
+    "#/sdfThing/IoTronicControlPlane/sdfObject/AuditTrail/sdfAction/QueryAuditEvents": {
+      "s4t:rest": "GET /audit/events (:8890, bearer token)"
+    },
+    "#/sdfThing/IoTronicControlPlane/sdfObject/AuditTrail/sdfEvent/AuditRecordAppended": {
+      "s4t:rest": "GET /audit/stream (SSE) or /audit/ws",
+      "s4t:amqpQueue": "s4t.audit"
+    }
+  }
+}

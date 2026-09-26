@@ -1,0 +1,1351 @@
+{
+  "info": {
+    "title": "Stack4Things IoTronic control plane",
+    "version": "2026-09-26",
+    "description": "SDF (RFC 9880) model of the control plane of Stack4Things: identity, board lifecycle, agent sessions, operations dispatched to boards, catalogs, request tracking, scheduling, twin control and audit.",
+    "modified": "2026-09-26T00:00:00Z",
+    "copyright": "Copyright 2026 University of Messina (SMART-E project)",
+    "license": "Apache-2.0"
+  },
+  "namespace": {
+    "s4t": "https://github.com/MDSLab/Stack4Things_DockerCompose_deployment/sdf"
+  },
+  "defaultNamespace": "s4t",
+  "sdfData": {
+    "Uuid": {
+      "type": "string",
+      "format": "uuid"
+    },
+    "Timestamp": {
+      "type": "string",
+      "format": "date-time"
+    },
+    "BoardStatus": {
+      "type": "string",
+      "enum": [
+        "registered",
+        "online",
+        "offline"
+      ]
+    },
+    "Location": {
+      "type": "object",
+      "properties": {
+        "latitude": {
+          "type": "number",
+          "unit": "lat"
+        },
+        "longitude": {
+          "type": "number",
+          "unit": "lon"
+        },
+        "altitude": {
+          "type": "number",
+          "unit": "m"
+        }
+      },
+      "required": [
+        "latitude",
+        "longitude",
+        "altitude"
+      ]
+    },
+    "BoardActionName": {
+      "type": "string",
+      "enum": [
+        "DevicePing",
+        "DeviceReboot",
+        "DeviceRestartLR",
+        "DeviceNetConfig",
+        "DeviceEcho",
+        "DeviceUpgradeLR",
+        "DevicePkgOperation",
+        "DeviceRestSubmit"
+      ],
+      "description": "Board.ACTIONS whitelist of the deployed conductor (upstream 0.4.17 has the first seven)."
+    },
+    "PluginActionName": {
+      "type": "string",
+      "enum": [
+        "PluginCall",
+        "PluginStop",
+        "PluginStart",
+        "PluginStatus",
+        "PluginReboot"
+      ],
+      "description": "Plugin.ACTIONS; PluginCall, PluginStart and PluginReboot take custom parameters, PluginStatus takes none."
+    },
+    "ServiceActionName": {
+      "type": "string",
+      "enum": [
+        "ServiceEnable",
+        "ServiceDisable",
+        "ServiceRestore"
+      ]
+    },
+    "RequestStatus": {
+      "type": "string",
+      "enum": [
+        "PENDING",
+        "COMPLETED"
+      ]
+    },
+    "ResultValue": {
+      "type": "string",
+      "enum": [
+        "SUCCESS",
+        "ERROR",
+        "WARNING",
+        "RUNNING"
+      ],
+      "description": "RUNNING: the agent accepted the call and will report later through notify_result."
+    },
+    "KeystoneRole": {
+      "type": "string",
+      "enum": [
+        "admin",
+        "admin_iot_project",
+        "manager_iot_project",
+        "user_iot"
+      ]
+    },
+    "RequestRef": {
+      "type": "object",
+      "properties": {
+        "request": {
+          "sdfRef": "#/sdfData/Uuid"
+        },
+        "status": {
+          "sdfRef": "#/sdfData/RequestStatus"
+        },
+        "result": {
+          "sdfRef": "#/sdfData/ResultValue"
+        },
+        "message": {
+          "type": "string"
+        }
+      },
+      "required": [
+        "request"
+      ],
+      "description": "Handle returned by every operation dispatched to a board; the final outcome is read from RequestTracking."
+    },
+    "Parameters": {
+      "type": "object",
+      "description": "Operation-specific parameters, passed to the agent unchanged."
+    }
+  },
+  "sdfThing": {
+    "IoTronicControlPlane": {
+      "label": "IoTronic control plane",
+      "description": "The platform-side services that decide and dispatch what boards do. The board-side affordances they invoke are defined in s4t-lightning-rod.sdf.json (D8.1).",
+      "sdfRequired": [
+        "#/sdfThing/IoTronicControlPlane/sdfObject/Identity",
+        "#/sdfThing/IoTronicControlPlane/sdfObject/BoardRegistry",
+        "#/sdfThing/IoTronicControlPlane/sdfObject/AgentSession",
+        "#/sdfThing/IoTronicControlPlane/sdfObject/BoardOperations",
+        "#/sdfThing/IoTronicControlPlane/sdfObject/RequestTracking"
+      ],
+      "sdfObject": {
+        "Identity": {
+          "label": "Identity and access",
+          "description": "Keystone authentication; every other affordance requires the token it issues.",
+          "sdfProperty": {
+            "iotPublicEndpoint": {
+              "type": "string",
+              "format": "uri",
+              "readable": true,
+              "writable": false,
+              "observable": false,
+              "description": "Public endpoint of the 'iot' service in the Keystone catalog; points at the audit proxy."
+            }
+          },
+          "sdfAction": {
+            "IssueToken": {
+              "description": "Password authentication scoped to a project.",
+              "sdfInputData": {
+                "type": "object",
+                "properties": {
+                  "username": {
+                    "type": "string"
+                  },
+                  "password": {
+                    "type": "string"
+                  },
+                  "project": {
+                    "type": "string"
+                  },
+                  "userDomain": {
+                    "type": "string"
+                  },
+                  "projectDomain": {
+                    "type": "string"
+                  }
+                },
+                "required": [
+                  "username",
+                  "password",
+                  "project"
+                ]
+              },
+              "sdfOutputData": {
+                "type": "object",
+                "properties": {
+                  "token": {
+                    "type": "string"
+                  },
+                  "expiresAt": {
+                    "sdfRef": "#/sdfData/Timestamp"
+                  },
+                  "roles": {
+                    "type": "array",
+                    "items": {
+                      "sdfRef": "#/sdfData/KeystoneRole"
+                    }
+                  }
+                },
+                "required": [
+                  "token"
+                ]
+              }
+            }
+          }
+        },
+        "BoardRegistry": {
+          "label": "Board registry",
+          "description": "Lifecycle of boards in IoTronic.",
+          "sdfAction": {
+            "CreateBoard": {
+              "description": "Registers a board; it starts as registered.",
+              "sdfInputData": {
+                "type": "object",
+                "properties": {
+                  "name": {
+                    "type": "string"
+                  },
+                  "code": {
+                    "type": "string"
+                  },
+                  "type": {
+                    "type": "string"
+                  },
+                  "mobile": {
+                    "type": "boolean"
+                  },
+                  "location": {
+                    "sdfRef": "#/sdfData/Location"
+                  },
+                  "extra": {
+                    "type": "object"
+                  }
+                },
+                "required": [
+                  "name",
+                  "code",
+                  "location"
+                ]
+              },
+              "sdfOutputData": {
+                "type": "object",
+                "properties": {
+                  "board": {
+                    "sdfRef": "#/sdfData/Uuid"
+                  },
+                  "status": {
+                    "sdfRef": "#/sdfData/BoardStatus"
+                  }
+                }
+              }
+            },
+            "UpdateBoard": {
+              "description": "Partial update of name, type, mobile, location, fleet or extra.",
+              "sdfInputData": {
+                "type": "object",
+                "properties": {
+                  "board": {
+                    "sdfRef": "#/sdfData/Uuid"
+                  },
+                  "changes": {
+                    "type": "object"
+                  }
+                },
+                "required": [
+                  "board",
+                  "changes"
+                ]
+              }
+            },
+            "DeleteBoard": {
+              "description": "Removes a board.",
+              "sdfInputData": {
+                "type": "object",
+                "properties": {
+                  "board": {
+                    "sdfRef": "#/sdfData/Uuid"
+                  }
+                },
+                "required": [
+                  "board"
+                ]
+              }
+            },
+            "ListBoards": {
+              "description": "Lists boards, filtered and paged.",
+              "sdfInputData": {
+                "type": "object",
+                "properties": {
+                  "status": {
+                    "sdfRef": "#/sdfData/BoardStatus"
+                  },
+                  "project": {
+                    "sdfRef": "#/sdfData/Uuid"
+                  },
+                  "limit": {
+                    "type": "integer",
+                    "minimum": 1
+                  }
+                }
+              },
+              "sdfOutputData": {
+                "type": "array",
+                "items": {
+                  "type": "object"
+                },
+                "description": "board records"
+              }
+            }
+          },
+          "sdfEvent": {
+            "BoardStatusChanged": {
+              "description": "Raised by the WAMP agent when a board session opens (online) or closes (offline).",
+              "sdfOutputData": {
+                "type": "object",
+                "properties": {
+                  "board": {
+                    "sdfRef": "#/sdfData/Uuid"
+                  },
+                  "status": {
+                    "sdfRef": "#/sdfData/BoardStatus"
+                  },
+                  "lrVersion": {
+                    "type": "string"
+                  }
+                },
+                "required": [
+                  "board",
+                  "status"
+                ]
+              }
+            }
+          }
+        },
+        "AgentSession": {
+          "label": "Agent registration and sessions",
+          "description": "Affordances the Lightning-Rod agent calls on the control plane over WAMP.",
+          "sdfAction": {
+            "Register": {
+              "description": "First registration of an agent with its board code.",
+              "sdfInputData": {
+                "type": "object",
+                "properties": {
+                  "code": {
+                    "type": "string"
+                  },
+                  "session": {
+                    "type": "string"
+                  }
+                },
+                "required": [
+                  "code",
+                  "session"
+                ]
+              },
+              "sdfOutputData": {
+                "type": "object",
+                "properties": {
+                  "board": {
+                    "sdfRef": "#/sdfData/Uuid"
+                  }
+                }
+              }
+            },
+            "Connect": {
+              "description": "Opens the board session; sets status online and records lr_version and connectivity.",
+              "sdfInputData": {
+                "type": "object",
+                "properties": {
+                  "board": {
+                    "sdfRef": "#/sdfData/Uuid"
+                  },
+                  "session": {
+                    "type": "string"
+                  },
+                  "info": {
+                    "type": "object"
+                  }
+                },
+                "required": [
+                  "board",
+                  "session"
+                ]
+              },
+              "sdfOutputData": {
+                "sdfRef": "#/sdfData/ResultValue"
+              }
+            },
+            "NotifyResult": {
+              "description": "Reports the final result of an operation previously answered with RUNNING.",
+              "sdfInputData": {
+                "type": "object",
+                "properties": {
+                  "board": {
+                    "sdfRef": "#/sdfData/Uuid"
+                  },
+                  "request": {
+                    "sdfRef": "#/sdfData/Uuid"
+                  },
+                  "result": {
+                    "sdfRef": "#/sdfData/ResultValue"
+                  },
+                  "message": {
+                    "type": "string"
+                  }
+                },
+                "required": [
+                  "board",
+                  "request",
+                  "result"
+                ]
+              }
+            },
+            "Alive": {
+              "description": "Liveness probe of the WAMP agent."
+            }
+          },
+          "sdfProperty": {
+            "activeSessions": {
+              "type": "array",
+              "items": {
+                "type": "object",
+                "properties": {
+                  "board": {
+                    "sdfRef": "#/sdfData/Uuid"
+                  },
+                  "session": {
+                    "type": "string"
+                  }
+                }
+              },
+              "description": "valid WAMP sessions (sessions table)",
+              "readable": true,
+              "writable": false
+            }
+          }
+        },
+        "BoardOperations": {
+          "label": "Board operations",
+          "description": "Dispatch of built-in device actions to one board.",
+          "sdfAction": {
+            "ExecuteBoardAction": {
+              "description": "Runs a Board.ACTIONS operation on the board; fails with BoardNotConnected if the board is not online.",
+              "sdfInputData": {
+                "type": "object",
+                "properties": {
+                  "board": {
+                    "sdfRef": "#/sdfData/Uuid"
+                  },
+                  "action": {
+                    "sdfRef": "#/sdfData/BoardActionName"
+                  },
+                  "parameters": {
+                    "sdfRef": "#/sdfData/Parameters"
+                  }
+                },
+                "required": [
+                  "board",
+                  "action"
+                ]
+              },
+              "sdfOutputData": {
+                "sdfRef": "#/sdfData/RequestRef"
+              }
+            }
+          }
+        },
+        "PluginCatalog": {
+          "label": "Plugin catalog",
+          "description": "Plugins as reusable code objects, independent of boards.",
+          "sdfAction": {
+            "CreatePlugin": {
+              "description": "Adds a plugin.",
+              "sdfInputData": {
+                "type": "object",
+                "properties": {
+                  "name": {
+                    "type": "string"
+                  },
+                  "code": {
+                    "type": "string"
+                  },
+                  "public": {
+                    "type": "boolean"
+                  },
+                  "callable": {
+                    "type": "boolean"
+                  },
+                  "parameters": {
+                    "type": "object"
+                  }
+                },
+                "required": [
+                  "name",
+                  "code"
+                ]
+              },
+              "sdfOutputData": {
+                "type": "object",
+                "properties": {
+                  "plugin": {
+                    "sdfRef": "#/sdfData/Uuid"
+                  }
+                }
+              }
+            },
+            "UpdatePlugin": {
+              "description": "Changes a plugin (owner or admin).",
+              "sdfInputData": {
+                "type": "object",
+                "properties": {
+                  "plugin": {
+                    "sdfRef": "#/sdfData/Uuid"
+                  },
+                  "changes": {
+                    "type": "object"
+                  }
+                },
+                "required": [
+                  "plugin",
+                  "changes"
+                ]
+              }
+            },
+            "DeletePlugin": {
+              "description": "Deletes a plugin (owner or admin).",
+              "sdfInputData": {
+                "type": "object",
+                "properties": {
+                  "plugin": {
+                    "sdfRef": "#/sdfData/Uuid"
+                  }
+                },
+                "required": [
+                  "plugin"
+                ]
+              }
+            },
+            "ListPlugins": {
+              "description": "Lists own, public or all plugins.",
+              "sdfInputData": {
+                "type": "object",
+                "properties": {
+                  "withPublic": {
+                    "type": "boolean"
+                  },
+                  "allPlugins": {
+                    "type": "boolean"
+                  }
+                }
+              },
+              "sdfOutputData": {
+                "type": "array",
+                "items": {
+                  "type": "object"
+                },
+                "description": "plugin records"
+              }
+            }
+          }
+        },
+        "PluginDeployment": {
+          "label": "Plugin deployment",
+          "description": "Placing plugins on boards and running them.",
+          "sdfAction": {
+            "InjectPlugin": {
+              "description": "Deploys a plugin on an online board.",
+              "sdfInputData": {
+                "type": "object",
+                "properties": {
+                  "board": {
+                    "sdfRef": "#/sdfData/Uuid"
+                  },
+                  "plugin": {
+                    "sdfRef": "#/sdfData/Uuid"
+                  },
+                  "onboot": {
+                    "type": "boolean",
+                    "default": false
+                  }
+                },
+                "required": [
+                  "board",
+                  "plugin"
+                ]
+              },
+              "sdfOutputData": {
+                "sdfRef": "#/sdfData/RequestRef"
+              }
+            },
+            "ExecutePluginAction": {
+              "description": "Runs a Plugin.ACTIONS operation.",
+              "sdfInputData": {
+                "type": "object",
+                "properties": {
+                  "board": {
+                    "sdfRef": "#/sdfData/Uuid"
+                  },
+                  "plugin": {
+                    "sdfRef": "#/sdfData/Uuid"
+                  },
+                  "action": {
+                    "sdfRef": "#/sdfData/PluginActionName"
+                  },
+                  "parameters": {
+                    "sdfRef": "#/sdfData/Parameters"
+                  }
+                },
+                "required": [
+                  "board",
+                  "plugin",
+                  "action"
+                ]
+              },
+              "sdfOutputData": {
+                "sdfRef": "#/sdfData/RequestRef"
+              }
+            },
+            "RemovePlugin": {
+              "description": "Removes a plugin from a board.",
+              "sdfInputData": {
+                "type": "object",
+                "properties": {
+                  "board": {
+                    "sdfRef": "#/sdfData/Uuid"
+                  },
+                  "plugin": {
+                    "sdfRef": "#/sdfData/Uuid"
+                  }
+                },
+                "required": [
+                  "board",
+                  "plugin"
+                ]
+              },
+              "sdfOutputData": {
+                "sdfRef": "#/sdfData/RequestRef"
+              }
+            }
+          }
+        },
+        "ServiceCatalog": {
+          "label": "Service catalog",
+          "description": "Network services (name, local port, protocol) that boards can expose.",
+          "sdfAction": {
+            "CreateService": {
+              "description": "Defines a service.",
+              "sdfInputData": {
+                "type": "object",
+                "properties": {
+                  "name": {
+                    "type": "string"
+                  },
+                  "port": {
+                    "type": "integer",
+                    "minimum": 1,
+                    "maximum": 65535
+                  },
+                  "protocol": {
+                    "type": "string"
+                  }
+                },
+                "required": [
+                  "name",
+                  "port",
+                  "protocol"
+                ]
+              },
+              "sdfOutputData": {
+                "type": "object",
+                "properties": {
+                  "service": {
+                    "sdfRef": "#/sdfData/Uuid"
+                  }
+                }
+              }
+            },
+            "UpdateService": {
+              "description": "Changes a service.",
+              "sdfInputData": {
+                "type": "object",
+                "properties": {
+                  "service": {
+                    "sdfRef": "#/sdfData/Uuid"
+                  },
+                  "changes": {
+                    "type": "object"
+                  }
+                },
+                "required": [
+                  "service",
+                  "changes"
+                ]
+              }
+            },
+            "DeleteService": {
+              "description": "Deletes a service.",
+              "sdfInputData": {
+                "type": "object",
+                "properties": {
+                  "service": {
+                    "sdfRef": "#/sdfData/Uuid"
+                  }
+                },
+                "required": [
+                  "service"
+                ]
+              }
+            }
+          }
+        },
+        "ServiceExposure": {
+          "label": "Service exposure",
+          "description": "Opening and closing WStun tunnels for services on boards.",
+          "sdfAction": {
+            "ExecuteServiceAction": {
+              "description": "ServiceEnable, ServiceDisable or ServiceRestore for one service on one board.",
+              "sdfInputData": {
+                "type": "object",
+                "properties": {
+                  "board": {
+                    "sdfRef": "#/sdfData/Uuid"
+                  },
+                  "service": {
+                    "sdfRef": "#/sdfData/Uuid"
+                  },
+                  "action": {
+                    "sdfRef": "#/sdfData/ServiceActionName"
+                  }
+                },
+                "required": [
+                  "board",
+                  "service",
+                  "action"
+                ]
+              },
+              "sdfOutputData": {
+                "sdfRef": "#/sdfData/RequestRef"
+              }
+            },
+            "RestoreServices": {
+              "description": "Re-applies every exposure recorded for a board.",
+              "sdfInputData": {
+                "type": "object",
+                "properties": {
+                  "board": {
+                    "sdfRef": "#/sdfData/Uuid"
+                  }
+                },
+                "required": [
+                  "board"
+                ]
+              },
+              "sdfOutputData": {
+                "sdfRef": "#/sdfData/RequestRef"
+              }
+            }
+          }
+        },
+        "WebServiceManagement": {
+          "label": "Web services",
+          "description": "HTTPS reverse proxy on a board.",
+          "sdfAction": {
+            "EnableWebServiceManager": {
+              "description": "Enables the manager with DNS, zone and certificate e-mail.",
+              "sdfInputData": {
+                "type": "object",
+                "properties": {
+                  "board": {
+                    "sdfRef": "#/sdfData/Uuid"
+                  },
+                  "dns": {
+                    "type": "string"
+                  },
+                  "zone": {
+                    "type": "string"
+                  },
+                  "email": {
+                    "type": "string",
+                    "format": "email"
+                  }
+                },
+                "required": [
+                  "board",
+                  "dns",
+                  "zone",
+                  "email"
+                ]
+              },
+              "sdfOutputData": {
+                "sdfRef": "#/sdfData/RequestRef"
+              }
+            },
+            "DisableWebServiceManager": {
+              "description": "Disables the manager.",
+              "sdfInputData": {
+                "type": "object",
+                "properties": {
+                  "board": {
+                    "sdfRef": "#/sdfData/Uuid"
+                  }
+                },
+                "required": [
+                  "board"
+                ]
+              },
+              "sdfOutputData": {
+                "sdfRef": "#/sdfData/RequestRef"
+              }
+            },
+            "ExposeWebService": {
+              "description": "Publishes a web service running on the board.",
+              "sdfInputData": {
+                "type": "object",
+                "properties": {
+                  "board": {
+                    "sdfRef": "#/sdfData/Uuid"
+                  },
+                  "name": {
+                    "type": "string"
+                  },
+                  "port": {
+                    "type": "integer",
+                    "minimum": 1,
+                    "maximum": 65535
+                  },
+                  "secure": {
+                    "type": "boolean",
+                    "default": true
+                  }
+                },
+                "required": [
+                  "board",
+                  "name",
+                  "port"
+                ]
+              },
+              "sdfOutputData": {
+                "sdfRef": "#/sdfData/RequestRef"
+              }
+            },
+            "UnexposeWebService": {
+              "description": "Removes a published web service.",
+              "sdfInputData": {
+                "type": "object",
+                "properties": {
+                  "webservice": {
+                    "sdfRef": "#/sdfData/Uuid"
+                  }
+                },
+                "required": [
+                  "webservice"
+                ]
+              },
+              "sdfOutputData": {
+                "sdfRef": "#/sdfData/RequestRef"
+              }
+            }
+          }
+        },
+        "PortManagement": {
+          "label": "Ports",
+          "description": "Neutron-style network ports attached to boards.",
+          "sdfAction": {
+            "AttachPort": {
+              "description": "Creates and attaches a port.",
+              "sdfInputData": {
+                "type": "object",
+                "properties": {
+                  "board": {
+                    "sdfRef": "#/sdfData/Uuid"
+                  },
+                  "network": {
+                    "type": "object"
+                  },
+                  "subnet": {
+                    "type": "object"
+                  },
+                  "securityGroups": {
+                    "type": "object"
+                  }
+                },
+                "required": [
+                  "board",
+                  "network"
+                ]
+              },
+              "sdfOutputData": {
+                "type": "object",
+                "properties": {
+                  "port": {
+                    "sdfRef": "#/sdfData/Uuid"
+                  }
+                }
+              }
+            },
+            "DetachPort": {
+              "description": "Detaches and removes a port.",
+              "sdfInputData": {
+                "type": "object",
+                "properties": {
+                  "board": {
+                    "sdfRef": "#/sdfData/Uuid"
+                  },
+                  "port": {
+                    "sdfRef": "#/sdfData/Uuid"
+                  }
+                },
+                "required": [
+                  "board",
+                  "port"
+                ]
+              }
+            }
+          }
+        },
+        "FleetManagement": {
+          "label": "Fleets",
+          "description": "Grouping of boards.",
+          "sdfAction": {
+            "CreateFleet": {
+              "description": "Creates a fleet.",
+              "sdfInputData": {
+                "type": "object",
+                "properties": {
+                  "name": {
+                    "type": "string"
+                  },
+                  "description": {
+                    "type": "string"
+                  }
+                },
+                "required": [
+                  "name"
+                ]
+              },
+              "sdfOutputData": {
+                "type": "object",
+                "properties": {
+                  "fleet": {
+                    "sdfRef": "#/sdfData/Uuid"
+                  }
+                }
+              }
+            },
+            "UpdateFleet": {
+              "description": "Changes a fleet.",
+              "sdfInputData": {
+                "type": "object",
+                "properties": {
+                  "fleet": {
+                    "sdfRef": "#/sdfData/Uuid"
+                  },
+                  "changes": {
+                    "type": "object"
+                  }
+                },
+                "required": [
+                  "fleet",
+                  "changes"
+                ]
+              }
+            },
+            "DeleteFleet": {
+              "description": "Deletes a fleet.",
+              "sdfInputData": {
+                "type": "object",
+                "properties": {
+                  "fleet": {
+                    "sdfRef": "#/sdfData/Uuid"
+                  }
+                },
+                "required": [
+                  "fleet"
+                ]
+              }
+            },
+            "ListFleetBoards": {
+              "description": "Boards of a fleet.",
+              "sdfInputData": {
+                "type": "object",
+                "properties": {
+                  "fleet": {
+                    "sdfRef": "#/sdfData/Uuid"
+                  }
+                },
+                "required": [
+                  "fleet"
+                ]
+              },
+              "sdfOutputData": {
+                "type": "array",
+                "items": {
+                  "sdfRef": "#/sdfData/Uuid"
+                },
+                "description": "member boards"
+              }
+            }
+          }
+        },
+        "RequestTracking": {
+          "label": "Requests and results",
+          "description": "Asynchronous outcome of every dispatched operation.",
+          "sdfAction": {
+            "GetRequest": {
+              "description": "Reads one request and its status.",
+              "sdfInputData": {
+                "type": "object",
+                "properties": {
+                  "request": {
+                    "sdfRef": "#/sdfData/Uuid"
+                  }
+                },
+                "required": [
+                  "request"
+                ]
+              },
+              "sdfOutputData": {
+                "sdfRef": "#/sdfData/RequestRef"
+              }
+            },
+            "ListResults": {
+              "description": "Per-board results of a request.",
+              "sdfInputData": {
+                "type": "object",
+                "properties": {
+                  "request": {
+                    "sdfRef": "#/sdfData/Uuid"
+                  }
+                },
+                "required": [
+                  "request"
+                ]
+              },
+              "sdfOutputData": {
+                "type": "array",
+                "items": {
+                  "type": "object",
+                  "properties": {
+                    "board": {
+                      "sdfRef": "#/sdfData/Uuid"
+                    },
+                    "result": {
+                      "sdfRef": "#/sdfData/ResultValue"
+                    },
+                    "message": {
+                      "type": "string"
+                    }
+                  }
+                },
+                "description": "results"
+              }
+            }
+          },
+          "sdfEvent": {
+            "RequestCompleted": {
+              "description": "A request moved from PENDING to COMPLETED (all sub-requests answered).",
+              "sdfOutputData": {
+                "type": "object",
+                "properties": {
+                  "request": {
+                    "sdfRef": "#/sdfData/Uuid"
+                  },
+                  "status": {
+                    "sdfRef": "#/sdfData/RequestStatus"
+                  }
+                },
+                "required": [
+                  "request",
+                  "status"
+                ]
+              }
+            }
+          }
+        },
+        "ScheduledActions": {
+          "label": "Scheduled actions",
+          "description": "Deferred and recurring execution of board or plugin actions (Scheduled Actions module, parallel work stream; see D4.1).",
+          "sdfAction": {
+            "CreateSchedule": {
+              "description": "Schedules a board action (plugin absent) or a plugin action.",
+              "sdfInputData": {
+                "type": "object",
+                "properties": {
+                  "board": {
+                    "sdfRef": "#/sdfData/Uuid"
+                  },
+                  "plugin": {
+                    "sdfRef": "#/sdfData/Uuid"
+                  },
+                  "action": {
+                    "type": "string"
+                  },
+                  "parameters": {
+                    "sdfRef": "#/sdfData/Parameters"
+                  },
+                  "scheduleType": {
+                    "type": "string",
+                    "enum": [
+                      "once",
+                      "interval"
+                    ]
+                  },
+                  "runAt": {
+                    "sdfRef": "#/sdfData/Timestamp"
+                  },
+                  "intervalSeconds": {
+                    "type": "integer",
+                    "unit": "s",
+                    "minimum": 1
+                  }
+                },
+                "required": [
+                  "board",
+                  "action",
+                  "scheduleType"
+                ]
+              },
+              "sdfOutputData": {
+                "type": "object",
+                "properties": {
+                  "schedule": {
+                    "sdfRef": "#/sdfData/Uuid"
+                  }
+                }
+              }
+            },
+            "UpdateSchedule": {
+              "description": "Changes, enables or disables a schedule.",
+              "sdfInputData": {
+                "type": "object",
+                "properties": {
+                  "schedule": {
+                    "sdfRef": "#/sdfData/Uuid"
+                  },
+                  "changes": {
+                    "type": "object"
+                  }
+                },
+                "required": [
+                  "schedule",
+                  "changes"
+                ]
+              }
+            },
+            "DeleteSchedule": {
+              "description": "Cancels a schedule.",
+              "sdfInputData": {
+                "type": "object",
+                "properties": {
+                  "schedule": {
+                    "sdfRef": "#/sdfData/Uuid"
+                  }
+                },
+                "required": [
+                  "schedule"
+                ]
+              }
+            }
+          },
+          "sdfEvent": {
+            "ScheduleFired": {
+              "description": "The conductor's poller (every 5 s) dispatched a due schedule.",
+              "sdfOutputData": {
+                "type": "object",
+                "properties": {
+                  "schedule": {
+                    "sdfRef": "#/sdfData/Uuid"
+                  },
+                  "lastStatus": {
+                    "type": "string",
+                    "enum": [
+                      "success",
+                      "failed"
+                    ]
+                  },
+                  "lastError": {
+                    "type": "string"
+                  }
+                },
+                "required": [
+                  "schedule",
+                  "lastStatus"
+                ]
+              }
+            }
+          }
+        },
+        "TwinControl": {
+          "label": "Digital twin control",
+          "description": "Desired-state control and twin reconciliation (Digital Twin layer).",
+          "sdfProperty": {
+            "reconcileInterval": {
+              "type": "integer",
+              "unit": "s",
+              "minimum": 1,
+              "default": 30,
+              "readable": true,
+              "writable": false,
+              "observable": false,
+              "description": "Provisioner pass interval (PROVISIONER_INTERVAL)."
+            }
+          },
+          "sdfAction": {
+            "SetDesiredState": {
+              "description": "Writes desired values on a board's twin; the bridge sends the difference to the device.",
+              "sdfInputData": {
+                "type": "object",
+                "properties": {
+                  "board": {
+                    "sdfRef": "#/sdfData/Uuid"
+                  },
+                  "desired": {
+                    "type": "object"
+                  }
+                },
+                "required": [
+                  "board",
+                  "desired"
+                ]
+              }
+            }
+          },
+          "sdfEvent": {
+            "TwinProvisioned": {
+              "description": "The provisioner created, updated or orphaned a twin.",
+              "sdfOutputData": {
+                "type": "object",
+                "properties": {
+                  "board": {
+                    "sdfRef": "#/sdfData/Uuid"
+                  },
+                  "change": {
+                    "type": "string",
+                    "enum": [
+                      "create",
+                      "update",
+                      "orphan"
+                    ]
+                  }
+                },
+                "required": [
+                  "board",
+                  "change"
+                ]
+              }
+            }
+          }
+        },
+        "AuditTrail": {
+          "label": "Audit trail",
+          "description": "Read-only access to the record of every control-plane operation.",
+          "sdfAction": {
+            "QueryAuditEvents": {
+              "description": "Filtered, sequence-ordered query.",
+              "sdfInputData": {
+                "type": "object",
+                "properties": {
+                  "fromSeq": {
+                    "type": "integer",
+                    "minimum": 0
+                  },
+                  "machineId": {
+                    "sdfRef": "#/sdfData/Uuid"
+                  },
+                  "machineAction": {
+                    "type": "string"
+                  },
+                  "actorType": {
+                    "type": "string",
+                    "enum": [
+                      "human",
+                      "device",
+                      "system",
+                      "unknown"
+                    ]
+                  },
+                  "operatorName": {
+                    "type": "string"
+                  },
+                  "from": {
+                    "sdfRef": "#/sdfData/Timestamp"
+                  },
+                  "to": {
+                    "sdfRef": "#/sdfData/Timestamp"
+                  },
+                  "limit": {
+                    "type": "integer",
+                    "minimum": 1,
+                    "maximum": 10000
+                  }
+                }
+              },
+              "sdfOutputData": {
+                "type": "object",
+                "properties": {
+                  "count": {
+                    "type": "integer"
+                  },
+                  "nextSeq": {
+                    "type": "integer"
+                  },
+                  "hasMore": {
+                    "type": "boolean"
+                  },
+                  "items": {
+                    "type": "array",
+                    "items": {
+                      "type": "object"
+                    }
+                  }
+                }
+              }
+            }
+          },
+          "sdfEvent": {
+            "AuditRecordAppended": {
+              "description": "A new record was stored (stream).",
+              "sdfOutputData": {
+                "type": "object",
+                "properties": {
+                  "sequence": {
+                    "type": "integer"
+                  },
+                  "machineAction": {
+                    "type": "string"
+                  },
+                  "operatorName": {
+                    "type": "string",
+                    "nullable": true
+                  }
+                },
+                "required": [
+                  "sequence",
+                  "machineAction"
+                ]
+              }
+            }
+          }
+        }
+      }
+    }
+  }
+}
