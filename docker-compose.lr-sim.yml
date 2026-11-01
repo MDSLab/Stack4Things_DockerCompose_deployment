@@ -1,0 +1,79 @@
+# docker-compose.lr-sim.yml
+#
+# Three SIMULATED Lightning-Rod boards for multi-device testing.
+#
+# This is a SEPARATE Compose project ("lr-sim"). It does not change the main
+# stack: it only joins the existing s4t network so the boards can reach
+# crossbar and iotronic-wstun. Every volume here is new and belongs to the
+# simulation only, so "down -v" on this project never touches production data.
+#
+# Do not run this file directly. Use:  ./scripts/lr_sim.sh up
+# (the script finds the real name of the s4t network and sets S4T_NETWORK).
+
+x-lr: &lr
+  image: lucadagati/lrod:compose
+  platform: linux/amd64
+  restart: unless-stopped
+  privileged: true
+  networks: [s4t]
+  stdin_open: true
+  tty: true
+  entrypoint: /bin/sh
+  command: >
+    -c "pip install cbor2 cbor && sed -i \"s|self\\.wstun_ip *=
+    .*|self.wstun_ip = \\\"iotronic-wstun\\\"|\"
+    /usr/local/lib/python3*/site-packages/iotronic_lightningrod/modules/service_manager.py
+    && exec startLR"
+
+services:
+  lr-sim-1:
+    <<: *lr
+    container_name: lr-sim-1
+    hostname: lr-sim-1
+    ports: ["1475:1474"]
+    volumes:
+      - sim1_var:/var/lib/iotronic
+      - sim1_le:/etc/letsencrypt/
+      - sim1_nginx:/etc/nginx
+      - sim1_confs:/etc/iotronic/
+
+  lr-sim-2:
+    <<: *lr
+    container_name: lr-sim-2
+    hostname: lr-sim-2
+    ports: ["1476:1474"]
+    volumes:
+      - sim2_var:/var/lib/iotronic
+      - sim2_le:/etc/letsencrypt/
+      - sim2_nginx:/etc/nginx
+      - sim2_confs:/etc/iotronic/
+
+  lr-sim-3:
+    <<: *lr
+    container_name: lr-sim-3
+    hostname: lr-sim-3
+    ports: ["1477:1474"]
+    volumes:
+      - sim3_var:/var/lib/iotronic
+      - sim3_le:/etc/letsencrypt/
+      - sim3_nginx:/etc/nginx
+      - sim3_confs:/etc/iotronic/
+
+networks:
+  s4t:
+    external: true
+    name: ${S4T_NETWORK:?run this through scripts/lr_sim.sh}
+
+volumes:
+  sim1_var: {}
+  sim1_le: {}
+  sim1_nginx: {}
+  sim1_confs: {}
+  sim2_var: {}
+  sim2_le: {}
+  sim2_nginx: {}
+  sim2_confs: {}
+  sim3_var: {}
+  sim3_le: {}
+  sim3_nginx: {}
+  sim3_confs: {}
