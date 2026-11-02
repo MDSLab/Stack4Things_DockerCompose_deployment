@@ -63,14 +63,22 @@ U2 = "9a1c77de-0b42-4f21-b3ac-51ee0d6f8c10"      # a plugin or a service
 # The published vocabulary. This is the contract in Audit_API_Reference.md.
 # =========================================================================
 TWIN_VOCAB = {
-    "telemetry.report", "desired.set", "prediction.write",
+    "telemetry.report", "desired.set", "desired.clear", "prediction.write",
     "twin.create", "twin.update", "twin.modify", "twin.delete",
 }
 
 OPERATOR_VOCAB = {
     "board.create", "board.read", "board.update", "board.delete", "board.action",
     "plugin.inject", "plugin.execute", "plugin.remove", "plugin.read",
-    "service.expose", "service.read", "service.remove",
+    "service.expose", "service.read", "service.remove", "service.restore",
+    # Derived from the action named in the request body. These are the names
+    # Lightning-Rod registers, read from its RPC log, not inferred.
+    "device.ping", "device.echo", "device.reboot", "device.restart_lr",
+    "device.net_config", "device.upgrade_lr", "device.pkg_operation",
+    "device.rest_submit",
+    "service.enable", "service.disable",
+    "plugin.start", "plugin.stop", "plugin.call", "plugin.reboot",
+    "plugin.status",
 }
 
 # =========================================================================
@@ -90,6 +98,11 @@ TWIN_CASES = [
     # `human` here would be the single most damaging lie the log could tell.
     ("/features/telemetry/desiredProperties",    "modified", "desired.set",      "unknown"),
     ("/features/telemetry/desiredProperties/fan_on", "merged", "desired.set",    "unknown"),
+    # how s4t-twin-api writes: a merge AT desiredProperties, so the path
+    # carries the marker (a root merge would arrive as path "/")
+    ("/features/telemetry/desiredProperties",    "merged",   "desired.set",      "unknown"),
+    # withdrawing a desired value
+    ("/features/telemetry/desiredProperties/fan_on", "deleted", "desired.clear", "unknown"),
     # desired beats prediction and telemetry: the marker is checked first
     ("/features/prediction/desiredProperties",   "modified", "desired.set",      "unknown"),
 
@@ -119,7 +132,11 @@ OPERATOR_CASES = [
     ("PATCH",  f"/v1/boards/{U1}",                    "board.update", U1),
     ("PUT",    f"/v1/boards/{U1}",                    "board.update", U1),
     ("DELETE", f"/v1/boards/{U1}",                    "board.delete", U1),
+    # a board action whose body names nothing usable falls back to this
+    ("POST",   f"/v1/boards/{U1}/action",             "board.action", U1),
     ("POST",   f"/v1/boards/{U1}/actions",            "board.action", U1),
+    # IoTronic's real injection route: PUT on the board's plugin collection
+    ("PUT",    f"/v1/boards/{U1}/plugins",            "plugin.inject",  U1),
 
     # plugins. Nested under a board, which is why order matters.
     ("POST",   f"/v1/boards/{U1}/plugins",            "plugin.inject",  U1),
@@ -135,11 +152,64 @@ OPERATOR_CASES = [
     ("PUT",    f"/v1/boards/{U1}/services/{U2}",      "service.expose", U1),
     ("GET",    f"/v1/boards/{U1}/services",           "service.read",   U1),
     ("DELETE", f"/v1/boards/{U1}/services/{U2}",      "service.remove", U1),
+    # restore is a GET in IoTronic, and it is NOT a read
+    ("GET",    f"/v1/boards/{U1}/services/restore",   "service.restore", U1),
 
     # the fallback. An action nobody anticipated still becomes a record.
     ("POST",   "/v1/something-nobody-designed",       "api.post",     None),
     ("GET",    "/v1/",                                "api.get",      None),
     ("HEAD",   "/",                                   "api.head",     None),
+]
+
+# =========================================================================
+# Operator requests whose BODY names the action.
+# (method, path, body, machine_action, machine_id)
+#
+# The real routes, from the SDF mapping of Lightning-Rod (D8.1). Without the
+# body every row of the first block would be `board.action`, which is the gap
+# that made "who rebooted this board" unanswerable.
+# =========================================================================
+def body(name, **extra):
+    import json
+    d = {"action": name}
+    d.update(extra)
+    return json.dumps(d).encode()
+
+
+BODY_CASES = [
+    ("POST", f"/v1/boards/{U1}/action", body("DevicePing"),         "device.ping",          U1),
+    ("POST", f"/v1/boards/{U1}/action", body("DeviceEcho", parameters={"say": "hi"}),
+                                                                    "device.echo",          U1),
+    ("POST", f"/v1/boards/{U1}/action", body("DeviceReboot"),       "device.reboot",        U1),
+    ("POST", f"/v1/boards/{U1}/action", body("DeviceRestartLR"),    "device.restart_lr",    U1),
+    ("POST", f"/v1/boards/{U1}/action", body("DeviceNetConfig"),    "device.net_config",    U1),
+    ("POST", f"/v1/boards/{U1}/action", body("DeviceUpgradeLR"),    "device.upgrade_lr",    U1),
+    ("POST", f"/v1/boards/{U1}/action", body("DevicePkgOperation"), "device.pkg_operation", U1),
+    ("POST", f"/v1/boards/{U1}/action", body("DeviceRestSubmit"),   "device.rest_submit",   U1),
+
+    ("POST", f"/v1/boards/{U1}/services/{U2}/action", body("ServiceEnable"),  "service.enable",  U1),
+    ("POST", f"/v1/boards/{U1}/services/{U2}/action", body("ServiceDisable"), "service.disable", U1),
+
+    ("POST", f"/v1/boards/{U1}/plugins/{U2}", body("PluginStart"),  "plugin.start",  U1),
+    ("POST", f"/v1/boards/{U1}/plugins/{U2}", body("PluginStop"),   "plugin.stop",   U1),
+    ("POST", f"/v1/boards/{U1}/plugins/{U2}", body("PluginCall"),   "plugin.call",   U1),
+    ("POST", f"/v1/boards/{U1}/plugins/{U2}", body("PluginReboot"), "plugin.reboot", U1),
+    ("POST", f"/v1/boards/{U1}/plugins/{U2}", body("PluginStatus"), "plugin.status", U1),
+
+    # A name that would not make a clean verb must not enter the vocabulary.
+    # It falls back to the path verb; the raw string stays in the detail.
+    ("POST", f"/v1/boards/{U1}/action", body("x; DROP TABLE"),      "board.action",  U1),
+    ("POST", f"/v1/boards/{U1}/action", body("Device"),             "board.action",  U1),
+    ("POST", f"/v1/boards/{U1}/action", b"not json at all",         "board.action",  U1),
+    ("POST", f"/v1/boards/{U1}/action", b'["a", "list"]',           "board.action",  U1),
+    ("POST", f"/v1/boards/{U1}/action", b'{"action": 42}',          "board.action",  U1),
+    # a trailing newline must not sneak a variant verb into the vocabulary
+    ("POST", f"/v1/boards/{U1}/action", body("DeviceReboot\n"),     "board.action",  U1),
+    # a GET is a read, even on an /action path
+    ("GET",  f"/v1/boards/{U1}/action", None,                       "board.read",    U1),
+    ("GET",  f"/v1/boards/{U1}/plugins/{U2}/action", None,          "plugin.read",   U1),
+    # A body on a DELETE is ignored: only POST and PUT carry an action.
+    ("DELETE", f"/v1/boards/{U1}/plugins/{U2}", body("PluginStart"), "plugin.remove", U1),
 ]
 
 # =========================================================================
@@ -170,6 +240,11 @@ for method, path, action, machine_id in OPERATOR_CASES:
     check(f"{method:6} {path}",
           proxy.classify_request(method, path), (action, machine_id))
 
+print("classify_request(): the action named in the body")
+for method, path, b, action, machine_id in BODY_CASES:
+    check(f"{method:6} {path[-22:]} {(b or b'')[:32]!r}",
+          proxy.classify_request(method, path, b), (action, machine_id))
+
 # -------------------------------------------------------------------------
 # Coverage. Without this the tables above could drift to cover nine of the
 # twelve verbs and still report a clean run, which is the same vacuous pass
@@ -177,7 +252,8 @@ for method, path, action, machine_id in OPERATOR_CASES:
 # -------------------------------------------------------------------------
 print("coverage: the tables exercise the whole published vocabulary")
 twin_seen = {a for _, _, a, _ in TWIN_CASES}
-oper_seen = {a for _, _, a, _ in OPERATOR_CASES if not a.startswith("api.")}
+oper_seen = ({a for _, _, a, _ in OPERATOR_CASES if not a.startswith("api.")}
+             | {a for _, _, _, a, _ in BODY_CASES})
 check("every twin verb has a case",     twin_seen, TWIN_VOCAB)
 check("every operator verb has a case", oper_seen, OPERATOR_VOCAB)
 
@@ -208,6 +284,14 @@ for path, topic_action, action, actor in TWIN_CASES:
               and rec["operator_name"] is None        # T5: never a human
               and rec["machine_name"])
     check(f"record for {action:15} at {path[:28]}", ok, True)
+
+# the raw action name travels next to the derived verb
+rec = proxy.build_operator_record(
+    user="tester", project="p", method="POST", path=f"/v1/boards/{U1}/action",
+    status=200, detail={"method": "POST"}, body=body("DeviceRestartLR"))
+check("raw action name kept in action.detail",
+      (rec["machine_action"], rec["action"]["detail"].get("action")),
+      ("device.restart_lr", "DeviceRestartLR"))
 
 # a malformed topic must be refused rather than stored as something plausible
 check("a malformed topic is refused",

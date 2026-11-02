@@ -17,10 +17,9 @@
 # _6010_iot_boards_panel.py exactly; the only differences are the slug and the
 # panel class.
 #
-# THE NUMBER IS THE SIDEBAR POSITION. Horizon processes these files in filename
-# order, so 6005 puts Overview first in the IoT group: after _6000_iot.py,
-# which registers the dashboard itself, and before boards at 6010. Renaming
-# this file is the whole mechanism for reordering it.
+# The number orders how Horizon PROCESSES these files, not where the panel
+# appears. A panel added this way is appended to the end of its group; the
+# position is set by UPDATE_HORIZON_CONFIG at the bottom of this file.
 #
 # DEFAULT_PANEL is deliberately left empty. Being first in the list is not the
 # same as being the panel the IoT section opens on. Set it to 'iot_overview'
@@ -32,9 +31,27 @@ PANEL = 'iot_overview'
 # The slug of the dashboard the PANEL associated with. Required.
 PANEL_DASHBOARD = 'iot'
 # The slug of the panel group the PANEL is associated with.
-PANEL_GROUP = 'iot'
+#
+# 'default', NOT 'iot'. The IoT dashboard declares its panels as a flat tuple,
+# so Boards, Plugins and the rest live in Horizon's unnamed 'default' group.
+# There is no group called 'iot': Horizon failed to find it, logged a warning,
+# and put this panel in a catch-all group it labels "Other", which showed in
+# the sidebar and as "IoT / Other" in the breadcrumb.
+PANEL_GROUP = 'default'
 # If set, it will update the default panel of the PANEL_DASHBOARD.
 DEFAULT_PANEL = ''
 
 # Python panel class of the PANEL to be added.
 ADD_PANEL = 'iotronic_ui.iot.iot_overview.panel.IotOverview'
+
+# Puts Overview FIRST in the IoT sidebar. Horizon appends enabled-file panels
+# to the end of their group and has no position setting, but it imports
+# HORIZON_CONFIG["customization_module"] after every panel is registered, and
+# that module reorders the group. See iot_overview/sidebar_order.py.
+#
+# Supported since Horizon Juno. NOTE: there is ONE customization_module per
+# Horizon. If local_settings.py or another plugin ever sets its own, this line
+# replaces it (or it replaces this one), and Overview drops back to last.
+UPDATE_HORIZON_CONFIG = {
+    'customization_module': 'iotronic_ui.iot.iot_overview.sidebar_order',
+}

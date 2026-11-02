@@ -129,6 +129,9 @@ def classify(path, topic_action):
     if topic_action == "created" and path == "/":
         return "twin.create", "system"
     if DESIRED_MARKER in path:
+        # Withdrawing a desired value is not setting one.
+        if topic_action == "deleted":
+            return "desired.clear", "unknown"
         return "desired.set", "unknown"
     if path.startswith(TELEMETRY_PATH):
         return "telemetry.report", "device"
@@ -144,8 +147,15 @@ def machine_name_from(extra, fallback):
     return name if isinstance(name, str) and name else fallback
 
 
-def build_record(topic, path, value, extra, revision, occurred_at):
-    """One Ditto twin event -> one audit record without its sequence."""
+def build_record(topic, path, value, extra, revision, occurred_at,
+                 correlation_id=None):
+    """One Ditto twin event -> one audit record without its sequence.
+
+    `correlation_id` is the Ditto command's correlation id. The twin command
+    service sets it to the id of its own operator record, so the two records
+    one operator write produces (who asked, from s4t-twin-api; what changed,
+    from here) can be joined on it.
+    """
     ns, name, topic_action = parse_topic(topic)
     if ns is None:
         return None
@@ -168,6 +178,7 @@ def build_record(topic, path, value, extra, revision, occurred_at):
                    "outcome": "success"},
         "source": "ditto",
         "twin_revision": revision,
+        "correlation_id": correlation_id,
     }
 
 
@@ -186,7 +197,8 @@ def record_from_twin_event(body):
     return build_record(
         topic=evt.get("topic"), path=evt.get("path"), value=evt.get("value"),
         extra=evt.get("extra"), revision=revision,
-        occurred_at=evt.get("timestamp") or headers.get("ditto-timestamp"))
+        occurred_at=evt.get("timestamp") or headers.get("ditto-timestamp"),
+        correlation_id=headers.get("correlation-id"))
 
 
 def record_from_operator_event(body):

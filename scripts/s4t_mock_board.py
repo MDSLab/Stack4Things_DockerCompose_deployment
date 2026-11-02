@@ -22,6 +22,20 @@ USAGE
     ./s4t_mock_board.py <board_uuid>
     ./s4t_mock_board.py <board_uuid> --host crossbar --interval 2
     ./s4t_mock_board.py <board_uuid> --drift 0.8 --spike-every 20
+
+    # a realistic machine: a CNC milling machine modelled on the AI4I 2020
+    # dataset, with real controls and its four failure modes. See
+    # s4t_machine_model.py. --time-scale speeds up machine time so tool wear
+    # is visible in a demo (60 = one machine minute per real second).
+    ./s4t_mock_board.py <board_uuid> --host crossbar --profile cnc
+    ./s4t_mock_board.py <board_uuid> --host crossbar --profile cnc --time-scale 60
+
+PROFILES
+--------
+    basic   the original: temperature drifts, `fan_on` is the only control
+    cnc     the simulated CNC mill. Seed its nameplate on the twin once with
+            scripts/seed_machine_profile.py so the allow list offers its
+            controls.
 """
 
 import argparse
@@ -50,7 +64,7 @@ async def publish(session, topic, **kwargs):
         await result
 
 
-def build_component(args, state):
+def build_component(args, state, machine=None):
     from autobahn.asyncio.component import Component
 
     comp = Component(
@@ -72,6 +86,15 @@ def build_component(args, state):
             if not isinstance(delta, dict):
                 print(f"[board] ignoring malformed command: {delta!r}")
                 return
+            if machine is not None:
+                refused = machine.apply(delta)
+                ok = {k: v for k, v in delta.items() if k not in refused}
+                if ok:
+                    print(f"[machine] applied {ok}")
+                for k, why in refused.items():
+                    # Not applied, so the twin keeps showing it as not reached.
+                    print(f"[machine] REFUSED {k}={delta.get(k)!r}: {why}")
+                return
             state.update(delta)
             print(f"[board] applied {delta}, state now {state}")
 
@@ -83,8 +106,27 @@ def build_component(args, state):
         print(f"[board] listening on s4t.command.{args.board_uuid}.apply")
 
         tick = 0
+        last_alarm = ""
         while True:
             tick += 1
+            if machine is not None:
+                machine.step(args.interval * args.time_scale)
+                report = machine.state()
+                await publish(session,
+                              f"s4t.telemetry.{args.board_uuid}.report",
+                              board_uuid=args.board_uuid,
+                              state=report,
+                              ts=time.strftime("%Y-%m-%dT%H:%M:%SZ", time.gmtime()))
+                if report["alarm_code"] != last_alarm:
+                    print(f"[machine] ALARM {report['alarm_code']}: {report['alarm_text']}"
+                          if report["alarm_code"] else "[machine] alarm cleared")
+                    last_alarm = report["alarm_code"]
+                print(f"[machine] {report['machine_state']:<11} "
+                      f"{report['spindle_speed_rpm']:>5} rpm  {report['torque_nm']:>5} Nm  "
+                      f"{report['spindle_power_kw']:>5} kW  wear {report['tool_wear_min']:>6} min  "
+                      f"parts {report['parts_produced']}")
+                await asyncio.sleep(args.interval)
+                continue
             state["temperature"] = round(
                 state["temperature"] + random.uniform(-args.drift, args.drift), 2)
             if args.spike_every and tick % args.spike_every == 0:
@@ -117,12 +159,26 @@ def main(argv=None):
                    help="Inject a fault spike every N reports. 0 disables. "
                         "Useful for testing anomaly detection in Phase 3.")
     p.add_argument("--spike", type=float, default=25.0, help="Size of the spike")
+    p.add_argument("--profile", choices=("basic", "cnc"), default="basic",
+                   help="basic: temperature and fan_on. cnc: a simulated CNC mill")
+    p.add_argument("--time-scale", type=float, default=10.0,
+                   help="cnc only: machine seconds per real second (default 10)")
+    p.add_argument("--seed", type=int, default=None,
+                   help="cnc only: make the run repeatable")
     args = p.parse_args(argv)
 
     state = {"temperature": args.start_temp, "fan_on": False}
+    machine = None
+    if args.profile == "cnc":
+        import os
+        sys.path.insert(0, os.path.dirname(os.path.abspath(__file__)))
+        from s4t_machine_model import CncMill
+        machine = CncMill(seed=args.seed)
+        print(f"[machine] simulated CNC mill, time x{args.time_scale:g}. "
+              f"Start it from the twin: run=ON")
 
     from autobahn.asyncio.component import Component  # noqa: F401  (import check)
-    comp = build_component(args, state)
+    comp = build_component(args, state, machine)
 
     async def run():
         loop = asyncio.get_running_loop()

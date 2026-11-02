@@ -368,6 +368,22 @@ services:
       # before _6010_iot_boards_panel.py. Horizon builds the sidebar in the
       # order it processes these files, so the number IS the position.
       - ./panels/_6005_iot_overview_panel.py:/usr/share/openstack-dashboard/openstack_dashboard/enabled/_6005_iot_overview_panel.py:ro
+      # Phase 1: the Overview panel above is also where operators act on a
+      # machine (device actions and twin actions). There is no separate
+      # Device Control panel any more.
+    environment:
+      # OVERRIDES ONLY. The panel's code defaults to exactly these values,
+      # because Apache may start Horizon with a cleared environment (Debian's
+      # apache2ctl runs httpd under `env -i`), in which case these never reach
+      # the WSGI process. The defaults keep the panel correct either way.
+      #
+      # Where the Overview panel relays twin actions. Internal only.
+      S4T_TWIN_API_URL: "http://s4t-twin-api:8892"
+      # Roles allowed to reboot a device or restart its agent from Overview.
+      # The conductor's own policy still applies on top.
+      S4T_DEVICE_ADMIN_ROLES: "${S4T_DEVICE_ADMIN_ROLES:-admin}"
+      # Seconds to wait for Lightning-Rod to answer a device action.
+      S4T_ACTION_TIMEOUT: "${S4T_ACTION_TIMEOUT:-30}"
 
   s4t-ditto-bridge:
     build:
@@ -627,6 +643,80 @@ services:
       resources:
         limits:
           memory: ${MEM_PROVISIONER:-192m}
+    logging:
+      driver: json-file
+      options: { max-size: "20m", max-file: "3" }
+
+  # ------------------------------------------------------------- Phase 1
+  # The twin command service. The ONLY way a person writes desired state on
+  # a twin. Horizon's IoT Overview panel calls it server side with the
+  # operator's own Keystone token; it validates the token with Keystone,
+  # checks the role and the allow list, writes to Ditto and records the
+  # operator's name in the audit log.
+  #
+  # NO PORT IS PUBLISHED. Its only client is iotronic-ui on this network.
+  # It holds the Ditto credential so the browser never does, and it is kept
+  # out of the audit proxy, which deliberately holds no credentials.
+  #
+  # Additive: without this service the Overview still works; only its twin
+  # actions report the service as unreachable.
+  s4t-twin-api:
+    build:
+      context: .
+      dockerfile: docker/ditto-tools/Dockerfile
+    image: s4t/ditto-tools:local
+    container_name: s4t-twin-api
+    restart: unless-stopped
+    command: ["s4t_twin_api.py"]
+    networks:
+      s4t:
+        aliases: [s4t-twin-api]
+    depends_on:
+      rabbitmq:
+        condition: service_healthy
+      keystone:
+        condition: service_healthy
+      s4t-ditto-bootstrap:
+        condition: service_completed_successfully
+    environment:
+      TWIN_API_PORT: "8892"
+      OS_AUTH_URL: "http://keystone:5000"
+      # Roles allowed to set or clear desired state. Comma separated.
+      TWIN_WRITE_ROLES: "${TWIN_WRITE_ROLES:-admin}"
+      # Roles allowed to READ twin status. Empty means any valid token.
+      TWIN_READ_ROLES: "${TWIN_READ_ROLES:-}"
+      TWIN_ALLOWLIST: "/etc/s4t/twin_allowlist.json"
+      # Seconds before a desired value the device has not reached is shown
+      # as "not confirmed" instead of "pending".
+      TWIN_CONFIRM_TIMEOUT: "${TWIN_CONFIRM_TIMEOUT:-60}"
+      # Fail open like the audit proxy. 1 refuses writes the audit log
+      # cannot record.
+      TWIN_FAIL_CLOSED: "${TWIN_FAIL_CLOSED:-0}"
+      DITTO_URL: "http://ditto-nginx:80"
+      DITTO_USER: "${DITTO_API_USER:-s4t}"
+      DITTO_PASS: "${DITTO_API_PASSWORD:?set DITTO_API_PASSWORD in .env}"
+      DITTO_NAMESPACE: "${DITTO_NAMESPACE:-s4t}"
+      S4T_AMQP_HOST: "${S4T_AMQP_HOST:-rabbitmq}"
+      S4T_AMQP_USER: "${S4T_AMQP_USER:-openstack}"
+      S4T_AMQP_PASS: "${S4T_AMQP_PASS:-unime}"
+      S4T_AMQP_VHOST: "${S4T_AMQP_VHOST:-/}"
+      AUDIT_OPERATOR_QUEUE: "${AUDIT_OPERATOR_QUEUE:-s4t.audit.ingest}"
+      HEARTBEAT_FILE: "/tmp/twin-api-alive"
+    volumes:
+      # Re-read on every request: edit the file, no restart needed.
+      - ./conf_twin/twin_allowlist.json:/etc/s4t/twin_allowlist.json:ro
+    healthcheck:
+      # Touched only while the audit queue is reachable, so a service that
+      # could write twins without recording them does not look healthy.
+      test: ["CMD-SHELL", "test -f /tmp/twin-api-alive && [ $$(( $$(date +%s) - $$(stat -c %Y /tmp/twin-api-alive) )) -lt 30 ]"]
+      interval: 15s
+      timeout: 5s
+      retries: 3
+      start_period: 30s
+    deploy:
+      resources:
+        limits:
+          memory: "${MEM_TWIN_API:-128m}"
     logging:
       driver: json-file
       options: { max-size: "20m", max-file: "3" }

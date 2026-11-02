@@ -85,7 +85,86 @@ UUID_RE = re.compile(
     r"[0-9a-fA-F]{8}-[0-9a-fA-F]{4}-[0-9a-fA-F]{4}-[0-9a-fA-F]{4}-[0-9a-fA-F]{12}")
 
 
-def classify_request(method, path):
+# =========================================================================
+# The action named in the request body
+# =========================================================================
+# IoTronic routes many different operations through ONE url per noun and puts
+# the operation's name in the body:
+#
+#     POST /v1/boards/<b>/action                {"action": "DeviceReboot", ...}
+#     POST /v1/boards/<b>/services/<s>/action   {"action": "ServiceEnable"}
+#     POST /v1/boards/<b>/plugins/<p>           {"action": "PluginStart", ...}
+#
+# Classifying on path and method alone therefore records a reboot and a ping
+# as the same `board.action`, and enabling and disabling a service as the same
+# `service.expose`. "Who rebooted Camera_03" was unanswerable.
+#
+# The verb is derived MECHANICALLY from the name rather than looked up in a
+# table, so an action Lightning-Rod gains later is still recorded under its own
+# name instead of collapsing into a fallback: strip the family prefix, then
+# CamelCase -> snake_case.
+#
+#     DeviceReboot     -> device.reboot
+#     DeviceRestartLR  -> device.restart_lr
+#     ServicesStatus   -> service.status
+#     PluginCall       -> plugin.call
+#
+# The raw name is always kept in `action.detail.action`, because a derived
+# verb is an interpretation and the auditor should be able to see what it was
+# derived from.
+ACTION_PREFIXES = {
+    "device": ("Device",),
+    "service": ("Services", "Service"),
+    "plugin": ("Plugins", "Plugin"),
+}
+_CAMEL = re.compile(r"(?<=[a-z0-9])(?=[A-Z])")
+_VERB_OK = re.compile(r"^[a-z][a-z0-9_]{0,39}\Z")   # \Z: `$` allows a trailing newline
+
+
+def action_name_from_body(body):
+    """The `action` field of a JSON request body, or None.
+
+    Never raises: a body that is empty, binary, not JSON or not an object is
+    simply "no action named", and the path based verb is used instead.
+    """
+    if not body:
+        return None
+    try:
+        if isinstance(body, (bytes, bytearray)):
+            body = body.decode("utf-8")
+        data = json.loads(body)
+    except (ValueError, UnicodeDecodeError, TypeError):
+        return None
+    if not isinstance(data, dict):
+        return None
+    name = data.get("action")
+    return name if isinstance(name, str) and name else None
+
+
+def derive_action_verb(family, name):
+    """`family.verb` from an IoTronic action name, or None if it cannot be
+    derived safely.
+
+    The result is checked against a strict pattern, so a client cannot inject
+    arbitrary strings into a vocabulary the ledger filters on. A name that
+    does not fit falls back to the path based verb and stays visible, raw, in
+    the detail.
+    """
+    if not name or not isinstance(name, str):
+        return None
+    rest = name
+    for prefix in ACTION_PREFIXES.get(family, ()):
+        if rest.startswith(prefix) and len(rest) > len(prefix):
+            rest = rest[len(prefix):]
+            break
+    verb = _CAMEL.sub("_", rest).lower()
+    # A bare prefix ("Device") names no operation at all.
+    if not _VERB_OK.match(verb) or rest in ACTION_PREFIXES.get(family, ()):
+        return None
+    return f"{family}.{verb}"
+
+
+def classify_request(method, path, body=None):
     """(machine_action, machine_id or None).
 
     A closed vocabulary, so the ledger side can filter without parsing free
@@ -104,16 +183,34 @@ def classify_request(method, path):
     is the board. That is deliberate: `machine_id` answers "which machine was
     this done to", not "which plugin was it done with". The plugin identifier
     stays visible in `action.target`.
+
+    `body` is optional. When it names an action (see derive_action_verb) that
+    name decides the verb, because the path alone cannot tell a reboot from a
+    ping. Without a usable body the path based verbs below apply exactly as
+    before, so callers that do not pass a body see no change.
     """
     m = UUID_RE.search(path or "")
     machine_id = m.group(0) if m else None
-    p = (path or "").lower()
+    uuids = UUID_RE.findall(path or "")
+    p = (path or "").lower().rstrip("/")
     is_action = "/actions" in p or "/action" in p
+    named = action_name_from_body(body) if method in ("POST", "PUT") else None
 
     if "/plugins" in p:
+        verb = derive_action_verb("plugin", named)
+        if verb:
+            return verb, machine_id
+        if method == "GET":                      # a read, whatever the path
+            return "plugin.read", machine_id
         if is_action:
             return "plugin.execute", machine_id
         if method == "POST":
+            return "plugin.inject", machine_id
+        # PUT /v1/boards/<b>/plugins is IoTronic's real injection route: a
+        # board and no plugin in the path. Any other PUT under /plugins keeps
+        # the older reading.
+        if method == "PUT" and "/boards" in p and len(uuids) == 1 \
+                and p.endswith("/plugins"):
             return "plugin.inject", machine_id
         if method == "PUT":
             return "plugin.execute", machine_id
@@ -122,6 +219,14 @@ def classify_request(method, path):
         if method == "GET":
             return "plugin.read", machine_id
     elif "/services" in p:
+        verb = derive_action_verb("service", named)
+        if verb:
+            return verb, machine_id
+        # Restoring services is a GET in IoTronic, but it changes the device.
+        # It must not be mistaken for a read, or it would be skipped along
+        # with every page load.
+        if method == "GET" and p.endswith("/services/restore"):
+            return "service.restore", machine_id
         if method in ("POST", "PUT"):
             return "service.expose", machine_id
         if method == "DELETE":
@@ -129,8 +234,8 @@ def classify_request(method, path):
         if method == "GET":
             return "service.read", machine_id
     elif "/boards" in p:
-        if is_action:
-            return "board.action", machine_id
+        if is_action and method != "GET":
+            return derive_action_verb("device", named) or "board.action", machine_id
         if method == "POST" and not machine_id:
             return "board.create", None
         if method == "DELETE":
@@ -146,10 +251,16 @@ def classify_request(method, path):
 
 
 def build_operator_record(user, project, method, path, status, machine_name=None,
-                          detail=None, correlation_id=None):
+                          detail=None, correlation_id=None, body=None):
     """One operator request -> one audit record, minus the sequence, which the
     logger assigns because it is the single writer."""
-    action, machine_id = classify_request(method, path)
+    action, machine_id = classify_request(method, path, body)
+    named = action_name_from_body(body) if method in ("POST", "PUT") else None
+    if named:
+        # The raw name next to the derived verb. Copy first, so a caller's
+        # dict is never mutated behind its back.
+        detail = dict(detail or {"method": method})
+        detail["action"] = named[:128]           # a body can be 16 MB
     outcome = "success" if 200 <= int(status) < 400 else "failure"
     return {
         "schema_version": SCHEMA_VERSION,
@@ -450,7 +561,7 @@ class Proxy:
 
         self.forwarded += 1
 
-        recorded = await self.record(request, token, status, correlation)
+        recorded = await self.record(request, token, status, correlation, body)
         if not recorded and self.o.fail_closed:
             return web.json_response(
                 {"error": "action refused: it could not be recorded in the audit log"},
@@ -458,21 +569,26 @@ class Proxy:
 
         return web.Response(body=payload, status=status, headers=out_headers)
 
-    async def record(self, request, token, status, correlation):
+    async def record(self, request, token, status, correlation, body=None):
         """Returns True when the record reached the queue."""
         import aio_pika
         # Reads are the overwhelming majority of Horizon traffic and are not
         # machine actions. Recording them would bury the operator actions the
         # ledger cares about under thousands of page loads.
+        #
+        # Decided on the VERB, not the method: IoTronic restores a board's
+        # services with a GET, and that changes the device.
         if request.method == "GET" and not self.o.record_reads:
-            return True
+            verb, _ = classify_request(request.method, request.rel_url.path)
+            if verb.endswith(".read") or verb.startswith("api."):
+                return True
         try:
             user, project = await self.resolver.resolve(self.session, token)
             rec = build_operator_record(
                 user=user, project=project, method=request.method,
                 path=request.rel_url.path, status=status,
                 detail={"method": request.method, "query": dict(request.query)},
-                correlation_id=correlation)
+                correlation_id=correlation, body=body)
             await self.channel.default_exchange.publish(
                 aio_pika.Message(
                     body=json.dumps(rec, separators=(",", ":"), sort_keys=True).encode(),

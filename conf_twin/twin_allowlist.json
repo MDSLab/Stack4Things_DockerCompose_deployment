@@ -1,0 +1,44 @@
+{
+  "_comment": [
+    "Properties an operator may set as DESIRED state from Horizon, through s4t-twin-api.",
+    "Anything not listed here is refused before it reaches Ditto. An empty or unreadable file refuses everything.",
+    "'default' applies to every board. 'by_board_type' adds or overrides entries for one board type (the twin's attributes/boardType).",
+    "'by_profile' is keyed by the twin's attributes/machine/profile and, when it matches, REPLACES everything else: a machine profile describes its controls completely.",
+    "Types: boolean, integer, number, string. Optional: min, max (numbers), enum (any type), max_length (strings), unit, description.",
+    "Re-read on every request, so an edit takes effect without a restart.",
+    "The cnc_mill entry must match CONTROLS in scripts/s4t_machine_model.py; test_twin_api.py checks that it does.",
+    "Phase 3 replaces this file with the twin definition from the D8.1 SDF model."
+  ],
+  "default": {
+    "fan_on": {
+      "type": "boolean",
+      "description": "Cooling fan on or off. Understood by scripts/s4t_mock_board.py."
+    }
+  },
+  "by_board_type": {},
+  "by_profile": {
+    "cnc_mill": {
+      "run": {
+        "type": "boolean",
+        "description": "Spindle running. After an alarm the machine needs OFF, then ON."
+      },
+      "mode": {
+        "type": "string",
+        "enum": ["auto", "manual", "maintenance"],
+        "description": "Operating mode. Maintenance stops the spindle, clears an alarm and changes the tool."
+      },
+      "spindle_speed_setpoint_rpm": {
+        "type": "integer", "min": 800, "max": 3000, "unit": "rpm",
+        "description": "Spindle speed setpoint. Below 1380 rpm with coolant on, heat dissipation can fail."
+      },
+      "feed_override_pct": {
+        "type": "integer", "min": 50, "max": 120, "unit": "%",
+        "description": "Feed override: scales the cutting load. Too high at high speed overloads the spindle."
+      },
+      "coolant_on": {
+        "type": "boolean",
+        "description": "Flood coolant."
+      }
+    }
+  }
+}

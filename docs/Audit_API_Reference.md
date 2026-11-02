@@ -215,21 +215,33 @@ A slow consumer is disconnected rather than allowed to stall the writer. Reconne
 
 ## Action vocabulary
 
-A closed set of nineteen values, so you can filter without parsing free text.
+A closed set of values, so you can filter without parsing free text.
 
-Seven come from the twin layer and describe machine and system activity:
+Eight come from the twin layer and describe machine and system activity:
 
 | `machine_action` | `actor.type` | Meaning |
 |---|---|---|
 | `telemetry.report` | device | A device reported measured state |
 | `desired.set` | unknown | Somebody set a desired value. A twin event carries no identity, so `unknown` is the honest answer |
+| `desired.clear` | unknown | Somebody withdrew a desired value |
 | `prediction.write` | system | A prediction was written to the twin |
 | `twin.create` | system | A twin was created, normally by the provisioner |
 | `twin.update` | system | Twin attributes changed |
 | `twin.modify` | system | Any other twin change |
 | `twin.delete` | system | A twin was removed |
 
-Twelve come from operator requests through the proxy. All have `actor.type: human` and `source: horizon`:
+Two come from the twin command service, `s4t-twin-api`, which is how Horizon writes to a twin. They have `actor.type: human`, `source: horizon` and the operator's validated Keystone name:
+
+| `machine_action` | Meaning |
+|---|---|
+| `desired.set` | An operator set one or more desired properties. `action.detail.properties` holds the values |
+| `desired.clear` | An operator withdrew a desired property. `action.detail.property` names it |
+
+A change made by an operator therefore appears **twice**: once from the twin command service with the operator's name, and once from the twin layer with `actor.type: unknown`. Both carry the same `correlation_id`, so you can join them. Filter on `actor_type=human` when you only want the operator's record. A refused request is recorded only once, by the twin command service, with `outcome: failure`.
+
+The rest come from operator requests through the proxy. All have `actor.type: human` and `source: horizon`.
+
+Path based verbs:
 
 | `machine_action` | Triggered by |
 |---|---|
@@ -237,14 +249,28 @@ Twelve come from operator requests through the proxy. All have `actor.type: huma
 | `board.read` | `GET` on a board |
 | `board.update` | `PATCH` or `PUT` on a board |
 | `board.delete` | `DELETE` on a board |
-| `board.action` | any path containing `/action` under a board |
-| `plugin.inject` | `POST` under `/plugins` |
-| `plugin.execute` | `PUT` under `/plugins`, or any `/plugins/.../action` |
+| `board.action` | a board `/action` request whose body names no usable action |
+| `plugin.inject` | `POST` under `/plugins`, or `PUT /v1/boards/<id>/plugins` |
+| `plugin.execute` | `PUT` under `/plugins`, or any `/plugins/.../action`, when the body names no action |
 | `plugin.remove` | `DELETE` under `/plugins` |
 | `plugin.read` | `GET` under `/plugins` |
-| `service.expose` | `POST` or `PUT` under `/services` |
+| `service.expose` | `POST` or `PUT` under `/services`, when the body names no action |
+| `service.restore` | `GET /v1/boards/<id>/services/restore`. A GET that changes the device, so it is always recorded |
 | `service.remove` | `DELETE` under `/services` |
 | `service.read` | `GET` under `/services` |
+
+**Verbs taken from the request body.** IoTronic sends many operations to one URL and names the operation in the body (`{"action": "DeviceReboot"}`). When a `POST` or `PUT` body names an action, the verb comes from that name: the family prefix is removed and the rest is converted to `snake_case`. The raw name is kept in `action.detail.action`.
+
+| Family | Lightning-Rod action | `machine_action` |
+|---|---|---|
+| Device (`/v1/boards/<id>/action`) | `DevicePing`, `DeviceEcho`, `DeviceReboot`, `DeviceRestartLR` | `device.ping`, `device.echo`, `device.reboot`, `device.restart_lr` |
+| | `DeviceNetConfig`, `DeviceUpgradeLR`, `DevicePkgOperation`, `DeviceRestSubmit` | `device.net_config`, `device.upgrade_lr`, `device.pkg_operation`, `device.rest_submit` |
+| Service (`.../services/<id>/action`) | `ServiceEnable`, `ServiceDisable` | `service.enable`, `service.disable` |
+| Plugin (`.../plugins/<id>`) | `PluginStart`, `PluginStop`, `PluginCall`, `PluginReboot`, `PluginStatus` | `plugin.start`, `plugin.stop`, `plugin.call`, `plugin.reboot`, `plugin.status` |
+
+An action Lightning-Rod adds later is recorded under its own derived name rather than a fallback. A name that would not make a clean verb (anything other than letters and digits, or longer than 40 characters) falls back to the path based verb, with the raw string still in the detail.
+
+**Change from earlier records.** Before this change every board action was `board.action` and every service action was `service.expose`. Records already in the log keep those values; new records use the specific verbs.
 
 Plus `api.<method>`, the fallback for a request the vocabulary does not recognise. Unrecognised actions still produce a record, because an action nobody anticipated is exactly what an auditor wants to see.
 

@@ -1,4 +1,4 @@
-# One image, four services. The bridge, provisioner and predictor in stages C
+# One image, several services. The bridge, provisioner and predictor in stages C
 # and D use the same image with a different `command:`, so there is a single
 # thing to build and a single version to reason about.
 FROM python:3.12-slim
@@ -27,9 +27,11 @@ COPY scripts/s4t_ditto_bootstrap.py ./
 COPY scripts/s4t_ditto_bridge.py ./
 COPY scripts/s4t_ditto_provisioner.py ./
 COPY scripts/s4t_mock_board.py ./
+COPY scripts/s4t_machine_model.py ./
 COPY scripts/s4t_audit_logger.py ./
 COPY scripts/s4t_audit_proxy.py ./
 COPY scripts/s4t_dashboard.py ./
+COPY scripts/s4t_twin_api.py ./
 # stage D adds:
 # COPY scripts/s4t_predictor.py ./
 RUN chmod +x *.py

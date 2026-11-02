@@ -1,0 +1,374 @@
+{% extends 'base.html' %}
+{% load i18n %}
+
+{% comment %}
+  One machine's activity log: its whole audit history, searched and filtered
+  on the server. Opened from the machine's header on the IoT Overview.
+
+  * The filters are kept in the address, so a filtered view can be bookmarked
+    or sent to a colleague, and the browser's back button returns to it.
+  * Telemetry is hidden by default: on a real device it is almost every row.
+  * Clicking a row opens its full detail; "Related records" finds every
+    record that shares its correlation id (an operator's twin write and the
+    change Ditto recorded for it, for example).
+  * Live updates run only on the first page, so rows never move while someone
+    is reading older ones.
+{% endcomment %}
+
+{% block title %}{% trans "Activity log" %}{% endblock %}
+
+{% block page_header %}
+  <hr class="header_rule">
+  <h1>{% trans "Activity log" %}</h1>
+{% endblock page_header %}
+
+{% block main %}
+<style>
+  .al { --ink:#222; --sub:#6b6b6b; --line:#dcdcdc; --soft:#f5f5f5; --ok:#2e6b30;
+        --warn:#8a5a00; --bad:#a3302b; --badbg:#f9e3e1; --selline:#2a6496; color:var(--ink); }
+  .al * { box-sizing:border-box; }
+  .al-mono { font-family: Menlo, Consolas, monospace; font-size:12px; }
+  .al-sub { color:var(--sub); }
+  .al-card { border:1px solid var(--line); background:#fff; margin-bottom:14px; }
+  .al-head { display:flex; gap:16px; align-items:center; flex-wrap:wrap; padding:12px 14px; }
+  .al-head h3 { margin:0; font-size:20px; }
+  .al-head .r { margin-left:auto; display:flex; gap:8px; }
+  .al-st { display:inline-block; width:10px; height:10px; margin-right:6px; vertical-align:-1px; }
+  .al-st.online { background:var(--ok); border-radius:50%; }
+  .al-st.offline { border:2px solid var(--warn); border-radius:50%; }
+  .al-st.other { border:2px dashed #999; border-radius:2px; }
+  .al-tools { position:sticky; top:0; z-index:5; background:var(--soft); border-bottom:1px solid var(--line);
+              padding:10px 14px; display:flex; flex-wrap:wrap; gap:6px 8px; align-items:center; }
+  .al-tools input[type=search] { flex:1 1 260px; min-width:200px; }
+  .al-tools select { width:auto; flex:0 0 auto; }
+  .al-tools label { font-weight:400; font-size:12px; margin:0 0 0 4px; white-space:nowrap; }
+  .al-link { border:0; background:none; padding:0; color:#2a6496; font-size:12px; }
+  .al-link:hover { text-decoration:underline; }
+  .al-status { display:flex; gap:12px; align-items:center; padding:8px 14px; font-size:12px;
+               border-bottom:1px solid #eee; }
+  .al-status .r { margin-left:auto; }
+  .al-tbl { width:100%; font-size:12px; table-layout:fixed; }
+  .al-tbl th { font-size:11px; text-transform:uppercase; letter-spacing:.04em; color:var(--sub);
+               font-weight:600; padding:7px 10px; border-bottom:1px solid var(--line); text-align:left;
+               background:#fff; }
+  .al-tbl td { padding:6px 10px; border-bottom:1px solid #f0f0f0; vertical-align:top; overflow:hidden; }
+  .al-tbl tbody tr.al-row { cursor:pointer; }
+  .al-tbl tbody tr.al-row:hover td { background:#fafafa; }
+  .al-tbl tbody tr.open td { background:#f3f7fb; }
+  .al-tbl .bad { color:var(--bad); font-weight:600; }
+  .al-tbl .sum { color:var(--sub); font-family:Menlo, Consolas, monospace; font-size:11px;
+                 white-space:nowrap; text-overflow:ellipsis; }
+  .al-tbl tr.fresh td { animation: alflash 2.5s ease-out; }
+  @keyframes alflash { from { background:#e8f0f8; } to { background:transparent; } }
+  .al-more td { background:#fbfbfb; padding:10px 14px 14px; }
+  .al-more dl { display:grid; grid-template-columns: 140px 1fr; gap:4px 12px; margin:0 0 8px; font-size:12px; }
+  .al-more dt { color:var(--sub); font-weight:400; } .al-more dd { margin:0; word-break:break-all; }
+  .al-more pre { margin:0; max-height:300px; overflow:auto; font-size:11px; background:#fff;
+                 border:1px solid #eee; white-space:pre-wrap; word-break:break-all; }
+  .al-foot { display:flex; gap:12px; align-items:center; padding:10px 14px; font-size:12px; }
+  .al-foot .btn { margin-left:auto; }
+  .al-empty { padding:24px 14px; color:var(--sub); }
+</style>
+
+<div class="al">
+
+{% if error %}
+  <div class="alert alert-warning"><strong>{% trans "The dashboard aggregator could not be reached." %}</strong>
+    <span class="al-mono">{{ error }}</span></div>
+{% endif %}
+
+<div class="al-card al-head">
+  <div>
+    <h3>{{ board.name }}</h3>
+    <div class="al-mono al-sub">{{ board.uuid }}</div>
+  </div>
+  <div class="al-sub" style="font-size:13px">
+    {% if board.status %}
+      <i class="al-st {% if board.online %}online{% elif board.status == 'offline' %}offline{% else %}other{% endif %}"></i>{{ board.status|capfirst }}
+      {% if board.type %}&middot; {{ board.type }}{% endif %}
+      {% if board.audit_count %}&middot; {{ board.audit_count }} {% trans "records in total" %}{% endif %}
+    {% endif %}
+  </div>
+  <div class="r">
+    <a class="btn btn-default btn-sm" href="{{ back_url }}">&larr; {% trans "Back to the machine" %}</a>
+  </div>
+</div>
+
+<div class="al-card">
+  <div class="al-tools" role="search">
+    <input type="search" class="form-control input-sm" id="al-q" autocomplete="off"
+           placeholder="{% trans 'Search actions, people, values, correlation ids  ( / )' %}" aria-label="{% trans 'Search' %}">
+    <select class="form-control input-sm" data-f="category" aria-label="{% trans 'Category' %}">
+      <option value="">{% trans "All categories" %}</option>
+      <option value="commands">{% trans "Device commands" %}</option>
+      <option value="twin">{% trans "Desired state" %}</option>
+      <option value="software">{% trans "Plugins and services" %}</option>
+      <option value="admin">{% trans "Board changes" %}</option>
+      <option value="telemetry">{% trans "Telemetry" %}</option>
+      <option value="system">{% trans "System" %}</option>
+    </select>
+    <select class="form-control input-sm" data-f="actor" aria-label="{% trans 'Who' %}">
+      <option value="">{% trans "Anyone" %}</option>
+      <option value="human">{% trans "People" %}</option>
+      <option value="device">{% trans "Devices" %}</option>
+      <option value="system">{% trans "System" %}</option>
+      <option value="unknown">{% trans "Unattributed" %}</option>
+    </select>
+    <select class="form-control input-sm" data-f="operator" id="al-operator" aria-label="{% trans 'Operator' %}">
+      <option value="">{% trans "Any operator" %}</option>
+    </select>
+    <select class="form-control input-sm" data-f="outcome" aria-label="{% trans 'Result' %}">
+      <option value="">{% trans "Any result" %}</option>
+      <option value="failure">{% trans "Failures only" %}</option>
+      <option value="success">{% trans "Successes only" %}</option>
+    </select>
+    <select class="form-control input-sm" data-f="since" aria-label="{% trans 'Period' %}">
+      <option value="">{% trans "Any time" %}</option>
+      <option value="1h">{% trans "Last hour" %}</option>
+      <option value="24h">{% trans "Last 24 hours" %}</option>
+      <option value="7d">{% trans "Last 7 days" %}</option>
+      <option value="30d">{% trans "Last 30 days" %}</option>
+    </select>
+    <label><input type="checkbox" id="al-tele" checked> {% trans "Hide telemetry" %}</label>
+    <button type="button" class="al-link" id="al-clear" style="visibility:hidden">{% trans "Clear filters" %}</button>
+  </div>
+  <div class="al-status">
+    <span id="al-count" class="al-sub"></span>
+    <span class="r al-sub" id="al-live"></span>
+    <button type="button" class="btn btn-default btn-xs" id="al-csv" title="{% trans 'Download the records shown as CSV' %}">{% trans "Export shown (CSV)" %}</button>
+  </div>
+  <div id="al-body"><div class="al-empty">{% trans "Loading..." %}</div></div>
+  <div class="al-foot" id="al-foot"></div>
+</div>
+
+</div>
+
+<script>
+(function () {
+  "use strict";
+  var CFG = {{ config_json|safe }};
+  var EMPTY = {q: "", category: "", actor: "", operator: "", outcome: "", since: "", tele: "hide"};
+  var F = {}, rows = [], pages = 0, more = false, next = null, top = 0, fresh = {}, open = {};
+  var busy = false, err = "", timer = null, ops = [];
+
+  function $(id) { return document.getElementById(id); }
+  function esc(s) {
+    return String(s === null || s === undefined ? "" : s)
+      .replace(/&/g, "&amp;").replace(/</g, "&lt;").replace(/>/g, "&gt;")
+      .replace(/"/g, "&quot;").replace(/'/g, "&#39;");
+  }
+  function hhmmss(d) { return d.toTimeString().slice(0, 8); }
+  function fmtTs(ts) {
+    var d = new Date(ts);
+    if (isNaN(d.getTime())) { return esc(ts || ""); }
+    var t = d.toTimeString().slice(0, 8);
+    if (d.toDateString() === new Date().toDateString()) { return t; }
+    return d.toLocaleDateString(undefined, {month: "short", day: "numeric"}) + " " + t;
+  }
+  function pretty(text) {
+    try { return JSON.stringify(JSON.parse(text), null, 2); } catch (e) { return text || ""; }
+  }
+
+  // ---- filters live in the address ---------------------------------------
+  function readUrl() {
+    var p = new URLSearchParams(window.location.search);
+    F = {};
+    Object.keys(EMPTY).forEach(function (k) { F[k] = p.get(k) || EMPTY[k]; });
+  }
+  function writeUrl() {
+    var p = [];
+    Object.keys(EMPTY).forEach(function (k) {
+      if (F[k] && F[k] !== EMPTY[k]) { p.push(k + "=" + encodeURIComponent(F[k])); }
+    });
+    try { window.history.replaceState(null, "", p.length ? "?" + p.join("&") : window.location.pathname); } catch (e) {}
+  }
+  function syncControls() {
+    $("al-q").value = F.q;
+    Array.prototype.forEach.call(document.querySelectorAll("[data-f]"), function (s) {
+      var k = s.getAttribute("data-f");
+      if (k === "operator" && F.operator && !s.querySelector('option[value="' + CSS.escape(F.operator) + '"]')) {
+        var o = document.createElement("option"); o.value = F.operator; o.textContent = F.operator; s.appendChild(o);
+      }
+      s.value = F[k];
+    });
+    $("al-tele").checked = F.tele !== "show";
+    $("al-tele").disabled = F.category === "telemetry";
+    $("al-clear").style.visibility = filtersOn() ? "" : "hidden";
+  }
+  function filtersOn() {
+    return Object.keys(EMPTY).some(function (k) { return F[k] !== EMPTY[k]; });
+  }
+  function query(before) {
+    var p = ["limit=100"];
+    ["q", "category", "actor", "operator", "outcome", "since"].forEach(function (k) {
+      if (F[k]) { p.push(k + "=" + encodeURIComponent(F[k])); }
+    });
+    if (F.tele !== "show") { p.push("hide_telemetry=1"); }
+    if (before) { p.push("before_seq=" + encodeURIComponent(before)); }
+    return "?" + p.join("&");
+  }
+
+  // ---- render -------------------------------------------------------------
+  function render() {
+    var h;
+    if (err && !rows.length) {
+      h = '<div class="al-empty" style="color:#a3302b">' + esc(err) + '</div>';
+    } else if (!rows.length) {
+      h = '<div class="al-empty">' + (filtersOn() ? "No record matches these filters." +
+          (F.tele !== "show" ? " Telemetry is hidden." : "") : "Nothing recorded for this machine yet.") + '</div>';
+    } else {
+      h = '<table class="al-tbl"><colgroup><col style="width:150px"><col style="width:18%"><col style="width:12%">' +
+        '<col style="width:11%"><col></colgroup><thead><tr><th>Time</th><th>Action</th><th>By</th><th>Result</th>' +
+        '<th>Detail</th></tr></thead><tbody>' + rows.map(function (e) {
+          var bad = e.outcome && e.outcome !== "success", isOpen = open[e.sequence];
+          // NOT class "row": that is a Bootstrap grid class, and its ::before
+          // becomes an extra table cell that shifts every column right.
+          var tr = '<tr class="al-row' + (isOpen ? " open" : "") + (fresh[e.sequence] ? " fresh" : "") +
+            '" data-seq="' + esc(e.sequence) + '" tabindex="0" aria-expanded="' + (!!isOpen) + '">' +
+            '<td class="al-sub" title="' + esc(e.timestamp) + '">' + fmtTs(e.timestamp) + '</td>' +
+            '<td class="al-mono">' + esc(e.machine_action) + '</td>' +
+            '<td>' + (e.operator ? esc(e.operator) : '<span class="al-sub">' + esc(e.actor || "-") + '</span>') + '</td>' +
+            '<td class="' + (bad ? "bad" : "al-sub") + '">' + esc(e.outcome || "") + (e.status_code ? " " + esc(e.status_code) : "") + '</td>' +
+            '<td class="sum">' + esc(e.summary) + '</td></tr>';
+          if (isOpen) {
+            tr += '<tr class="al-more"><td colspan="5"><dl>' +
+              '<dt>Time (UTC)</dt><dd class="al-mono">' + esc(e.timestamp) + '</dd>' +
+              '<dt>Sequence</dt><dd class="al-mono">#' + esc(e.sequence) + '</dd>' +
+              '<dt>Actor</dt><dd>' + esc(e.actor || "-") + (e.operator ? " &middot; " + esc(e.operator) : "") + '</dd>' +
+              '<dt>Source</dt><dd>' + esc(e.source || "-") + '</dd>' +
+              (e.target ? '<dt>Target</dt><dd class="al-mono">' + esc(e.target) + '</dd>' : "") +
+              (e.correlation_id ? '<dt>Correlation id</dt><dd class="al-mono">' + esc(e.correlation_id) +
+                ' &nbsp;<button type="button" class="al-link" data-related="' + esc(e.correlation_id) + '">Related records</button></dd>' : "") +
+              '</dl>' + (e.detail ? '<pre>' + esc(pretty(e.detail)) + '</pre>' : '<span class="al-sub">No detail recorded.</span>') +
+              '</td></tr>';
+          }
+          return tr;
+        }).join("") + '</tbody></table>';
+    }
+    $("al-body").innerHTML = h;
+    $("al-count").textContent = rows.length + (rows.length === 1 ? " record" : " records") + " shown" +
+      (more ? ", older records available" : (rows.length ? ", end of history" : ""));
+    $("al-foot").innerHTML =
+      (pages > 1 ? '<button type="button" class="al-link" id="al-latest">Back to latest</button>' : "") +
+      (more ? '<button type="button" class="btn btn-default btn-sm" id="al-more">' + (busy ? "Loading&hellip;" : "Load 100 older") + '</button>' : "");
+    $("al-live").textContent = pages > 1 ? "live updates paused while you browse older records"
+                                         : "live, updated " + hhmmss(new Date());
+  }
+
+  // ---- load -----------------------------------------------------------------
+  function setOps(list) {
+    if (!list) { return; }
+    ops = list;
+    var s = $("al-operator"), cur = F.operator;
+    s.innerHTML = '<option value="">Any operator</option>' + ops.concat(cur && ops.indexOf(cur) < 0 ? [cur] : [])
+      .map(function (o) { return '<option value="' + esc(o) + '">' + esc(o) + '</option>'; }).join("");
+    s.value = cur;
+  }
+  function call(url) {
+    return fetch(url, {credentials: "same-origin", headers: {"X-Requested-With": "XMLHttpRequest"}})
+      .then(function (r) { return r.json().then(function (d) { return {ok: r.ok, status: r.status, data: d || {}}; }); });
+  }
+  function load(reset) {
+    if (!reset && pages > 1) { return; }
+    var key = query();
+    call("../activity/" + key).then(function (r) {
+      if (key !== query()) { return; }
+      var d = r.data;
+      err = d.error || (r.ok ? "" : "Activity unavailable (" + r.status + ")");
+      var evs = d.events || [];
+      fresh = {};
+      if (!reset && top) { evs.forEach(function (e) { if (e.sequence > top) { fresh[e.sequence] = true; } }); }
+      if (reset) { open = {}; }
+      if (evs.length) { top = evs[0].sequence; }
+      rows = evs; pages = 1; more = !!d.has_more; next = d.next_before;
+      setOps(d.operators);
+      render();
+    }).catch(function (e) { err = "Activity unavailable: " + e; render(); });
+  }
+  function loadOlder() {
+    if (!next || busy) { return; }
+    var key = query();
+    busy = true; render();
+    call("../activity/" + query(next)).then(function (r) {
+      busy = false;
+      if (key !== query()) { return; }
+      fresh = {};
+      rows = rows.concat(r.data.events || []); pages++; more = !!r.data.has_more; next = r.data.next_before;
+      render();
+    }).catch(function () { busy = false; render(); });
+  }
+  function changed() {
+    writeUrl(); syncControls();
+    pages = 0; top = 0; rows = []; more = false;
+    $("al-body").innerHTML = '<div class="al-empty">Searching&hellip;</div>';
+    load(true);
+  }
+
+  // ---- events ---------------------------------------------------------------
+  $("al-q").addEventListener("input", function () {
+    F.q = this.value.trim();
+    clearTimeout(timer); timer = setTimeout(changed, 300);
+  });
+  Array.prototype.forEach.call(document.querySelectorAll("[data-f]"), function (s) {
+    s.addEventListener("change", function () { F[s.getAttribute("data-f")] = s.value; changed(); });
+  });
+  $("al-tele").addEventListener("change", function () { F.tele = this.checked ? "hide" : "show"; changed(); });
+  $("al-clear").addEventListener("click", function () {
+    F = JSON.parse(JSON.stringify(EMPTY)); changed();
+  });
+  function toggle(tr) {
+    var seq = tr.getAttribute("data-seq");
+    if (open[seq]) { delete open[seq]; } else { open[seq] = true; }
+    fresh = {}; render();
+  }
+  $("al-body").addEventListener("click", function (ev) {
+    var rel = ev.target.getAttribute && ev.target.getAttribute("data-related");
+    if (rel) {
+      F = JSON.parse(JSON.stringify(EMPTY)); F.q = rel; F.tele = "show"; changed(); return;
+    }
+    var tr = ev.target.closest ? ev.target.closest("tr.al-row") : null;
+    if (tr) { toggle(tr); }
+  });
+  $("al-body").addEventListener("keydown", function (ev) {
+    if (ev.key === "Enter" && ev.target.classList && ev.target.classList.contains("al-row")) { toggle(ev.target); }
+  });
+  $("al-foot").addEventListener("click", function (ev) {
+    if (ev.target.id === "al-more") { loadOlder(); }
+    if (ev.target.id === "al-latest") { pages = 0; load(true); }
+  });
+  document.addEventListener("keydown", function (e) {
+    if (e.key !== "/") { return; }
+    var a = document.activeElement, tag = (a && a.tagName) || "";
+    var typing = tag === "TEXTAREA" || tag === "SELECT" ||
+      (tag === "INPUT" && !/^(checkbox|radio|button|submit)$/i.test(a.type || ""));
+    if (typing) { return; }
+    e.preventDefault(); $("al-q").focus();
+  });
+
+  // ---- export: exactly the rows on screen, nothing re-queried ----------------
+  $("al-csv").addEventListener("click", function () {
+    function cell(v) {
+      var s = String(v === null || v === undefined ? "" : v);
+      // A leading = + - @ makes a spreadsheet treat the cell as a formula.
+      if (/^[=+\-@]/.test(s)) { s = "'" + s; }
+      return '"' + s.replace(/"/g, '""') + '"';
+    }
+    var head = ["timestamp_utc", "sequence", "machine_action", "actor", "operator", "outcome",
+                "status_code", "source", "target", "correlation_id", "detail"];
+    var lines = [head.join(",")].concat(rows.map(function (e) {
+      return [e.timestamp, e.sequence, e.machine_action, e.actor, e.operator, e.outcome,
+              e.status_code, e.source, e.target, e.correlation_id, e.detail].map(cell).join(",");
+    }));
+    var blob = new Blob([lines.join("\r\n") + "\r\n"], {type: "text/csv;charset=utf-8"});
+    var a = document.createElement("a");
+    a.href = URL.createObjectURL(blob);
+    a.download = (CFG.name || CFG.uuid).replace(/[^A-Za-z0-9_.-]+/g, "_") + "_activity.csv";
+    document.body.appendChild(a); a.click(); a.remove();
+    setTimeout(function () { URL.revokeObjectURL(a.href); }, 1000);
+  });
+
+  readUrl(); syncControls(); load(true);
+  setInterval(function () { load(false); }, 6000);
+})();
+</script>
+{% endblock %}

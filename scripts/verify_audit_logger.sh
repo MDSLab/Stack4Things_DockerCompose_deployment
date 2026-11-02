@@ -263,7 +263,7 @@ case "$BYTES" in
 esac
 
 head_ "10. T4c DELIVERY. Every OPERATOR action reaches the log"
-note "ten request shapes are driven through the proxy with a real Keystone token"
+note "thirteen request shapes are driven through the proxy with a real Keystone token"
 # SAFETY. Every identifier below is randomly generated, so the conductor
 # answers 404 or 400 and nothing real is created, changed or deleted. A
 # REJECTED action is still an action and is still recorded, with
@@ -295,9 +295,19 @@ CALLS = [
     ("POST",   f"/v1/boards/{u1}/services"),        # service.expose
     ("DELETE", f"/v1/boards/{u1}/services/{u2}"),   # service.remove
     ("POST",   "/v1/audit-verification-probe"),     # api.post, the fallback
+    # The action named in the BODY decides the verb. Random identifiers, so
+    # the conductor answers 404 and no board is rebooted.
+    ("POST",   f"/v1/boards/{u1}/action", {"action": "DeviceReboot"}),       # device.reboot
+    ("POST",   f"/v1/boards/{u1}/services/{u2}/action",
+               {"action": "ServiceDisable"}),                               # service.disable
+    ("POST",   f"/v1/boards/{u1}/plugins/{u2}", {"action": "PluginStart"}),  # plugin.start
 ]
-for method, path in CALLS:
+import json
+for call in CALLS:
+    method, path = call[0], call[1]
     body = b"{}" if method in ("POST", "PUT", "PATCH") else None
+    if len(call) > 2:
+        body = json.dumps(call[2]).encode()
     req = urllib.request.Request(
         B + path, data=body, method=method,
         headers={"X-Auth-Token": os.environ["TOK"],
@@ -307,7 +317,7 @@ for method, path in CALLS:
     except Exception:
         pass                                        # a rejection is still recorded
 PY
-  OP_EXPECT="api.post board.action board.create board.delete board.update plugin.execute plugin.inject plugin.remove service.expose service.remove"
+  OP_EXPECT="api.post board.action board.create board.delete board.update device.reboot plugin.execute plugin.inject plugin.remove plugin.start service.disable service.expose service.remove"
   OP_SEEN=""
   for _ in $(seq 1 10); do
     OP_SEEN=$(actions_for "/audit/events?from_seq=$MAXBEFORE&actor_type=human&limit=200")
@@ -315,7 +325,7 @@ PY
     sleep 2
   done
   if [ "$OP_SEEN" = "$OP_EXPECT" ]; then
-    ok "all 10 operator actions recorded: $OP_SEEN"
+    ok "all 13 operator actions recorded: $OP_SEEN"
   elif [ -z "$OP_SEEN" ]; then
     no "not one request was recorded" \
        "the proxy log says whether it saw them: dcs logs --tail 30 s4t-audit-proxy"

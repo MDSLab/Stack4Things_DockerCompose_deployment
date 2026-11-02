@@ -2,14 +2,25 @@
 {% load i18n %}
 
 {% comment %}
-  Django's {# #} comment form must fit on ONE line. A two line one is not a
-  comment at all: it renders as text, and a browser hoists stray text out of a
-  table, which is why an early version of this page printed its own comment
-  above the header. Multi line comments use this tag instead.
+  IoT Overview: every machine, its twin and every action on it, on one page.
+  (Formerly two panels, Overview and Device Control.)
 
-  Styled with Horizon's own Bootstrap classes plus a small inline block. No new
-  static files on purpose: any would pull in collectstatic and a category of
-  cache problems for no visual gain.
+  Design rules, taken from industrial HMI practice (ISA-101):
+    * Neutral by default. Colour is used only for a state that needs
+      attention, and a colour is never the only signal: every state also has
+      a word and a distinct shape.
+    * Select, then act. The machine list is on the left; everything about the
+      selected machine, and every action on it, is on the right. An action is
+      never further than one row away from the state it changes.
+    * Risk decides placement. Routine operation (desired state) comes first,
+      harmless diagnostics next, and disruptive maintenance last, separated,
+      and confirmed by typing the machine's name.
+    * Feedback where the eye already is. A command's outcome appears in the
+      selected machine's activity list, not in a banner at the top of the page.
+
+  Same constraints as the Overview template: Horizon's Bootstrap 3 classes
+  plus one inline style block, no new static files, every request same origin
+  with Django's CSRF token. The server re-checks every rule the page applies.
 {% endcomment %}
 
 {% block title %}{% trans "IoT Overview" %}{% endblock %}
@@ -21,383 +32,883 @@
 
 {% block main %}
 <style>
-  .s4t-cards { display: flex; flex-wrap: wrap; gap: 12px; margin-bottom: 20px; }
-  .s4t-card { border: 1px solid #ddd; border-radius: 4px; padding: 10px 18px;
-              min-width: 140px; background: #fafafa; }
-  .s4t-card .n { font-size: 24px; font-weight: 600; line-height: 1.1; }
-  .s4t-card .l { color: #777; font-size: 11px; letter-spacing: .04em;
-                 text-transform: uppercase; }
-  .s4t-kv { font-family: Menlo, Consolas, monospace; font-size: 12px; }
-  .s4t-muted { color: #999; }
-  .s4t-stale { color: #a94442; }
-  .s4t-fresh { color: #3c763d; }
-  .s4t-fail  { color: #a94442; }
-  .s4t-board { cursor: pointer; }
-  .s4t-board:hover { background: #f0f7ff !important; }
+  /* ---- palette: greys for structure, colour only for state ---------- */
+  .dc { --ink:#222; --sub:#6b6b6b; --line:#dcdcdc; --soft:#f5f5f5;
+        --ok:#2e6b30; --warn:#8a5a00; --warnbg:#fcf3df; --bad:#a3302b;
+        --badbg:#f9e3e1; --sel:#e8f0f8; --selline:#2a6496; color:var(--ink); }
+  .dc * { box-sizing: border-box; }
+  .dc-mono { font-family: Menlo, Consolas, monospace; font-size: 12px; }
+  .dc-sub { color: var(--sub); }
 
-  /* Modal. Bootstrap's classes for the look, driven by our own code so the
-     page does not depend on Horizon's bootstrap.js being loaded here. */
-  .s4t-backdrop { position: fixed; top: 0; left: 0; right: 0; bottom: 0;
-                  background: rgba(0,0,0,.45); z-index: 1040; }
-  .s4t-modal { position: fixed; top: 0; left: 0; right: 0; bottom: 0;
-               z-index: 1050; overflow-y: auto; }
-  .s4t-modal-dialog { max-width: 940px; margin: 40px auto; background: #fff;
-                      border-radius: 5px; box-shadow: 0 5px 20px rgba(0,0,0,.3); }
-  .s4t-modal-head { padding: 14px 20px; border-bottom: 1px solid #e5e5e5; }
-  .s4t-modal-body { padding: 16px 20px; max-height: 70vh; overflow-y: auto; }
-  .s4t-modal-foot { padding: 10px 20px; border-top: 1px solid #e5e5e5;
-                    display: flex; justify-content: space-between;
-                    align-items: center; }
-  .s4t-x { float: right; font-size: 22px; line-height: 1; cursor: pointer;
-           color: #999; border: 0; background: none; }
-  .s4t-sec { font-size: 12px; text-transform: uppercase; letter-spacing: .04em;
-             color: #555; margin: 18px 0 6px; }
-  .s4t-sec:first-child { margin-top: 0; }
-  .s4t-tbl { width: 100%; font-size: 12px; }
-  .s4t-tbl th { color: #777; font-weight: 600; text-align: left;
-                border-bottom: 1px solid #ddd; padding: 4px 10px 4px 0; }
-  .s4t-tbl td { padding: 4px 10px 4px 0; border-bottom: 1px solid #f2f2f2;
-                vertical-align: top; }
-  .s4t-diff { color: #8a6d3b; background: #fcf8e3; }
-  .s4t-new td { animation: s4tflash 2.5s ease-out; }
-  @keyframes s4tflash { from { background: #d9edf7; } to { background: transparent; } }
-  .s4t-dot { display: inline-block; width: 8px; height: 8px; border-radius: 50%;
-             background: #3c763d; margin-right: 6px; }
+  /* ---- top strip ------------------------------------------------------ */
+  .dc-strip { display:flex; flex-wrap:wrap; gap:24px; align-items:center;
+              border:1px solid var(--line); background:#fff; padding:8px 14px;
+              margin-bottom:14px; font-size:13px; }
+  .dc-strip b { font-size:16px; margin-right:4px; }
+  .dc-strip .dc-fresh { margin-left:auto; }
+
+  /* ---- layout ---------------------------------------------------------- */
+  .dc-wrap { display:flex; gap:16px; align-items:flex-start; }
+  .dc-list { flex:0 0 330px; border:1px solid var(--line); background:#fff; }
+  .dc-detail { flex:1 1 auto; min-width:0; }
+  @media (max-width: 1100px) {
+    .dc-wrap { flex-direction:column; }
+    .dc-list { flex:none; width:100%; }
+  }
+
+  /* ---- machine list ---------------------------------------------------- */
+  .dc-tools { padding:10px; border-bottom:1px solid var(--line); background:var(--soft); }
+  .dc-tools input { margin-bottom:8px; }
+  .dc-seg { display:flex; }
+  .dc-seg button { flex:1; border:1px solid var(--line); background:#fff; padding:3px 0;
+                   font-size:12px; color:var(--sub); }
+  .dc-seg button + button { border-left:0; }
+  .dc-seg button.on { background:#fff; color:var(--ink); font-weight:600;
+                      box-shadow: inset 0 -2px 0 var(--selline); }
+  .dc-items { max-height: 70vh; overflow-y:auto; }
+  .dc-item { display:flex; gap:10px; padding:9px 12px; border-bottom:1px solid #eee;
+             cursor:pointer; align-items:flex-start; outline:none; }
+  .dc-item:hover { background:#fafafa; }
+  .dc-item.sel { background:var(--sel); box-shadow: inset 3px 0 0 var(--selline); }
+  .dc-item:focus { box-shadow: inset 0 0 0 2px var(--selline); }
+  .dc-item .n { font-weight:600; word-break:break-all; }
+  .dc-item .m { font-size:12px; color:var(--sub); }
+  .dc-item .s { margin-left:auto; font-size:12px; white-space:nowrap; text-align:right; }
+  .dc-empty { padding:16px; color:var(--sub); }
+  .dc-paths { border-top:1px solid var(--line); background:var(--soft); padding:10px 12px; }
+  .dc-paths h5 { margin:0 0 6px; font-size:11px; text-transform:uppercase; letter-spacing:.05em;
+                 color:var(--sub); font-weight:600; }
+  .dc-paths h5 small { text-transform:none; letter-spacing:0; }
+  .dc-path { display:flex; gap:8px; font-size:12px; padding:3px 0; }
+  .dc-path .w { flex:1; } .dc-path .w div { color:var(--sub); font-size:11px; }
+  .dc-path .a { white-space:nowrap; } .dc-path .a.old { color:var(--warn); font-weight:600; }
+  .dc-stale { color:var(--warn); font-weight:600; }
+  .dc-loglink { float:right; margin-left:12px; }
+  .dc-kvwrap { margin-top:8px; max-height:420px; overflow:auto; border:1px solid #eee; }
+  .dc-kv { width:100%; table-layout:fixed; font-size:12px; border-collapse:collapse; }
+  .dc-kv th { width:170px; text-align:left; font-weight:600; color:var(--sub); vertical-align:top;
+              padding:5px 10px; border-bottom:1px solid #f0f0f0; word-break:break-word; }
+  .dc-kv td { padding:5px 10px; border-bottom:1px solid #f0f0f0; vertical-align:top;
+              word-break:break-word; overflow-wrap:anywhere; }
+  .dc-kv.nested { background:#fafafa; border:1px solid #eee; }
+  .dc-kv.nested th { width:150px; }
+  .dc-kv tr:last-child > th, .dc-kv tr:last-child > td { border-bottom:0; }
+  .dc-attrs { margin-top:10px; font-size:12px; }
+  .dc-attrs summary { cursor:pointer; color:#2a6496; }
+  .dc-attrs .dc-tele { margin-top:6px; border-top:0; padding-top:0; }
+
+  /* status: shape AND word AND colour, so no state depends on colour alone */
+  .dc-st { display:inline-block; width:10px; height:10px; margin-top:5px; flex:none; }
+  .dc-st.online  { background:var(--ok); border-radius:50%; }
+  .dc-st.offline { border:2px solid var(--warn); border-radius:50%; }
+  .dc-st.other   { border:2px dashed #999; border-radius:2px; }
+  .dc-stw.online { color:var(--ok); } .dc-stw.offline { color:var(--warn); }
+  .dc-stw.other { color:var(--sub); }
+  .dc-pend { display:inline-block; font-size:11px; padding:0 5px; border:1px solid var(--warn);
+             color:var(--warn); border-radius:2px; margin-top:3px; }
+
+  /* ---- detail cards ---------------------------------------------------- */
+  .dc-card { border:1px solid var(--line); background:#fff; margin-bottom:14px; }
+  .dc-card > h4 { margin:0; padding:10px 14px; font-size:14px; font-weight:600;
+                  border-bottom:1px solid var(--line); background:var(--soft);
+                  display:flex; align-items:baseline; gap:8px; }
+  .dc-card > h4 small { font-weight:400; color:var(--sub); }
+  .dc-card > h4 .r { margin-left:auto; font-weight:400; font-size:12px; }
+  .dc-body { padding:12px 14px; }
+  .dc-head { padding:12px 14px; }
+  .dc-head h3 { margin:0 0 2px; font-size:20px; }
+  .dc-facts { display:flex; flex-wrap:wrap; gap:6px 28px; margin-top:10px; font-size:13px; }
+  .dc-facts .k { display:block; font-size:11px; text-transform:uppercase;
+                 letter-spacing:.04em; color:var(--sub); }
+  .dc-banner { padding:9px 14px; margin-bottom:14px; border:1px solid var(--warn);
+               background:var(--warnbg); color:#5a3c00; font-size:13px; }
+  .dc-banner.bad { border-color:var(--bad); background:var(--badbg); color:#6b1e1a; }
+  .dc-placeholder { border:1px dashed var(--line); padding:40px; text-align:center;
+                    color:var(--sub); background:#fff; }
+
+  /* ---- twin table -------------------------------------------------------- */
+  .dc-tbl { width:100%; font-size:13px; }
+  .dc-tbl th { font-size:11px; text-transform:uppercase; letter-spacing:.04em;
+               color:var(--sub); font-weight:600; padding:6px 10px 6px 0;
+               border-bottom:1px solid var(--line); text-align:left; }
+  .dc-tbl td { padding:8px 10px 8px 0; border-bottom:1px solid #eee; vertical-align:middle; }
+  .dc-tbl tr.staged td { background:#f3f7fb; }
+  .dc-tbl .desc { font-size:12px; color:var(--sub); }
+  .dc-state { font-size:12px; white-space:nowrap; }
+  .dc-state.converged { color:var(--ok); }
+  .dc-state.pending { color:var(--warn); }
+  .dc-state.unconfirmed { color:var(--bad); font-weight:600; }
+  .dc-state.idle { color:var(--sub); }
+  .dc-ctl { display:flex; gap:6px; align-items:center; flex-wrap:wrap; }
+  .dc-ctl .btn-group .btn.active { background:#e6e6e6; box-shadow: inset 0 2px 3px rgba(0,0,0,.12);
+                                   font-weight:600; }
+  .dc-ctl input { width:110px; }
+  .dc-link { border:0; background:none; padding:0; color:#2a6496; font-size:12px; }
+  .dc-link:hover { text-decoration:underline; }
+  .dc-review { display:flex; gap:12px; align-items:center; margin-top:12px;
+               padding:10px 12px; background:#f3f7fb; border:1px solid #c9d9ea; }
+  .dc-review .chg { flex:1; }
+  .dc-tele { display:grid; grid-template-columns: repeat(auto-fill, minmax(180px, 1fr));
+             gap:6px 16px; margin-top:12px; padding-top:10px; border-top:1px solid #eee; }
+  .dc-tele div { font-size:13px; }
+  .dc-tele small { font-family: inherit; font-weight:600; }
+  .dc-z-warn { color:var(--warn); } .dc-z-bad { color:var(--bad); }
+
+  .dc-tele > div > span { display:block; font-size:11px; color:var(--sub); }
+
+  /* ---- commands ----------------------------------------------------------- */
+  .dc-cmds { display:flex; gap:0; }
+  .dc-grp { flex:1; padding:12px 14px; }
+  .dc-grp + .dc-grp { border-left:1px solid var(--line); background:#fcfcfc; }
+  .dc-grp h5 { margin:0 0 10px; font-size:11px; text-transform:uppercase; letter-spacing:.05em;
+               color:var(--sub); font-weight:600; }
+  .dc-cmd { display:flex; gap:12px; align-items:flex-start; padding:8px 0; }
+  .dc-cmd + .dc-cmd { border-top:1px solid #eee; }
+  .dc-cmd .btn { min-width:130px; text-align:left; flex:none; }
+  .dc-cmd .t { font-size:12px; color:var(--sub); }
+  .dc-cmd .lock { font-size:12px; color:var(--warn); }
+  .btn.dc-risk { color:var(--bad); border-color:#d9a19d; }
+  .btn.dc-risk:hover { background:var(--badbg); }
+  @media (max-width: 800px) { .dc-cmds { flex-direction:column; }
+    .dc-grp + .dc-grp { border-left:0; border-top:1px solid var(--line); } }
+
+  /* ---- activity ------------------------------------------------------------ */
+  .dc-mine { margin-bottom:12px; }
+  .dc-mine h5, .dc-auditwrap h5 { margin:0 0 6px; font-size:11px; text-transform:uppercase;
+                                  letter-spacing:.05em; color:var(--sub); font-weight:600; }
+  .dc-auditwrap { border-top:1px solid #eee; padding-top:10px; }
+  .dc-acttools { display:flex; flex-wrap:wrap; gap:6px 8px; align-items:center; margin-bottom:8px; }
+  .dc-acttools input[type=search] { flex:1 1 220px; min-width:180px; }
+  .dc-acttools select { width:auto; flex:0 0 auto; }
+  .dc-acttools label { font-weight:400; font-size:12px; margin:0 0 0 4px; white-space:nowrap; }
+  .dc-actfoot { display:flex; gap:12px; align-items:center; margin-top:8px; font-size:12px; }
+  .dc-actfoot .btn { margin-left:auto; }
+  .dc-act tr.fresh td { animation: dcflash 2.5s ease-out; }
+  @keyframes dcflash { from { background:#e8f0f8; } to { background:transparent; } }
+  .dc-act .sum { color:var(--sub); font-family: Menlo, Consolas, monospace; font-size:11px;
+                 word-break:break-all; }
+  .dc-chip { display:inline-block; font-size:11px; padding:0 6px; border:1px solid var(--line);
+             border-radius:2px; color:var(--sub); margin-left:6px; }
+  .dc-auditscroll { max-height:520px; overflow-y:auto; border-bottom:1px solid #eee; }
+  .dc-auditscroll thead td { position:sticky; top:0; background:#fff; z-index:1;
+                             border-bottom:1px solid var(--line); }
+  .dc-act { width:100%; font-size:12px; }
+  .dc-act td { padding:5px 10px 5px 0; border-bottom:1px solid #f0f0f0; vertical-align:top; }
+  .dc-act .ok { color:var(--ok); } .dc-act .bad { color:var(--bad); font-weight:600; }
+  .dc-act .run { color:var(--warn); }
+  .dc-act tr.mine td:first-child { box-shadow: inset 3px 0 0 var(--selline); padding-left:8px; }
+  .dc-act pre { margin:4px 0 0; padding:4px 6px; font-size:11px; max-height:90px; overflow:auto;
+                background:var(--soft); border:0; white-space:pre-wrap; }
+
+  /* ---- confirmation dialog ------------------------------------------------- */
+  .dc-backdrop { position:fixed; top:0; left:0; right:0; bottom:0; background:rgba(0,0,0,.45); z-index:1060; }
+  .dc-modal { position:fixed; top:0; left:0; right:0; bottom:0; z-index:1070; overflow-y:auto; }
+  .dc-dialog { max-width:500px; margin:110px auto; background:#fff; border-radius:4px;
+               box-shadow:0 5px 20px rgba(0,0,0,.3); }
+  .dc-dialog .h { padding:14px 18px; border-bottom:1px solid #e5e5e5; }
+  .dc-dialog .h h4 { margin:0; }
+  .dc-dialog .b { padding:14px 18px; font-size:13px; }
+  .dc-dialog .f { padding:10px 18px; border-top:1px solid #e5e5e5; text-align:right; }
+  .dc-dialog .f .btn + .btn { margin-left:6px; }
 </style>
 
+<div class="dc">
+
 {% if error %}
-  <div class="alert alert-warning">
+  <div class="dc-banner bad">
     <strong>{% trans "The dashboard aggregator could not be reached." %}</strong>
-    {% trans "Board data below may be empty." %}
-    <span class="s4t-kv">{{ error }}</span>
+    {% trans "The machine list may be empty or out of date." %}
+    <span class="dc-mono">{{ error }}</span>
   </div>
 {% endif %}
-
+{% comment %}A partial failure inside the aggregator (for example the twin layer down while the registry is fine) is reported per source, not collapsed into one error.{% endcomment %}
+<div id="dc-srcerr">
 {% for source, message in source_errors.items %}
-  <div class="alert alert-warning">
-    <strong>{{ source }}:</strong> <span class="s4t-kv">{{ message }}</span>
-  </div>
+  <div class="dc-banner"><strong>{{ source }}:</strong> <span class="dc-mono">{{ message }}</span></div>
 {% endfor %}
-
-<div class="s4t-cards">
-  <div class="s4t-card"><div class="n">{{ totals.boards|default:"0" }}</div>
-    <div class="l">{% trans "Boards" %}</div></div>
-  <div class="s4t-card"><div class="n">{{ totals.online|default:"0" }}</div>
-    <div class="l">{% trans "Online now" %}</div></div>
-  <div class="s4t-card"><div class="n">{{ totals.agents_seen|default:"0" }}</div>
-    <div class="l">{% trans "Agents ever seen" %}</div></div>
-  <div class="s4t-card"><div class="n">{{ totals.with_twin|default:"0" }}</div>
-    <div class="l">{% trans "With a twin" %}</div></div>
-  <div class="s4t-card"><div class="n">{{ totals.audit_records|default:"0" }}</div>
-    <div class="l">{% trans "Audit records" %}</div></div>
 </div>
 
-<h3>{% trans "Boards" %}</h3>
-<p class="s4t-muted">{% trans "Click a board to open its twin properties and its live activity." %}</p>
+<div class="dc-strip" role="status" aria-live="polite">
+  <span><b id="dc-n-all">0</b>{% trans "machines" %}</span>
+  <span><b id="dc-n-online">0</b>{% trans "online" %}</span>
+  <span><b id="dc-n-offline">0</b>{% trans "not online" %}</span>
+  <span><b id="dc-n-pending">0</b>{% trans "with pending requests" %}</span>
+  <span class="dc-sub"><b id="dc-n-agents" style="color:#222">0</b>{% trans "agents ever seen" %}</span>
+  <span class="dc-sub"><b id="dc-n-twin" style="color:#222">0</b>{% trans "with a twin" %}</span>
+  <span class="dc-sub"><b id="dc-n-audit" style="color:#222">0</b>{% trans "audit records" %}</span>
+  <span class="dc-fresh dc-sub" id="dc-fresh"></span>
+</div>
 
-<table class="table table-condensed">
-  <thead>
-    <tr>
-      <th style="width:22%">{% trans "Name" %}</th>
-      <th>{% trans "Status" %}</th>
-      <th>{% trans "Agent" %}</th>
-      <th>{% trans "Twin" %}</th>
-      <th>{% trans "Last reported" %}</th>
-      <th>{% trans "Age" %}</th>
-      <th>{% trans "Last action" %}</th>
-      <th>{% trans "By" %}</th>
-      <th>{% trans "Events" %}</th>
-    </tr>
-  </thead>
-  <tbody id="s4t-rows">
-  {% for b in boards %}
-    <tr class="s4t-board" id="row-{{ b.uuid }}"
-        data-uuid="{{ b.uuid }}" data-name="{{ b.name }}">
-      <td>{{ b.name }}<br>
-        <span class="s4t-kv s4t-muted">{{ b.uuid }}</span></td>
-      <td class="c-status">
-        {% if b.online %}<span class="label label-success">{{ b.status }}</span>
-        {% else %}<span class="label label-default">{{ b.status }}</span>{% endif %}
-      </td>
-      <td class="c-agent">
-        {% if b.agent_seen %}{{ b.lr_version }}
-        {% else %}<span class="s4t-muted">{% trans "never seen" %}</span>{% endif %}
-      </td>
-      <td class="c-twin">
-        {% if b.twin.present %}rev {{ b.twin.revision }}
-        {% else %}<span class="s4t-stale">{% trans "missing" %}</span>{% endif %}
-      </td>
-      <td class="c-tele s4t-kv">
-        {% if b.twin.telemetry %}
-          {% for k, v in b.twin.telemetry.items %}{{ k }}={{ v }} {% endfor %}
-        {% else %}<span class="s4t-muted">{% trans "no telemetry" %}</span>{% endif %}
-      </td>
-      <td class="c-age">
-        {% if b.twin.age_human is None %}
-          <span class="s4t-muted">{% trans "unknown" %}</span>
-        {% elif b.twin.stale %}
-          <span class="s4t-stale">{{ b.twin.age_human }}</span>
-        {% else %}
-          <span class="s4t-fresh">{{ b.twin.age_human }}</span>
-        {% endif %}
-      </td>
-      <td class="c-action s4t-kv">{{ b.audit.last_action|default:"-" }}</td>
-      <td class="c-by">{{ b.audit.last_operator|default:"-" }}</td>
-      <td class="c-count">{{ b.audit.count }}</td>
-    </tr>
-  {% empty %}
-    <tr><td colspan="9" class="s4t-muted">{% trans "No boards registered." %}</td></tr>
-  {% endfor %}
-  </tbody>
-</table>
-
-<h3>{% trans "Paths" %}</h3>
-{% comment %}
-  Health is "when did this path last deliver something", not a green dot
-  meaning a process is running. A container cannot see its siblings' health
-  without the Docker socket, and delivery is the more useful question anyway.
-{% endcomment %}
-<table class="table table-condensed" style="max-width:640px">
-  <tbody>
-  {% for h in health %}
-    <tr>
-      <td><strong>{{ h.name }}</strong></td>
-      <td class="s4t-muted">{{ h.detail }}</td>
-      <td>
-        {% if h.age_seconds is None %}<span class="s4t-muted">-</span>
-        {% else %}{{ h.age_seconds|floatformat:0 }}s {% trans "ago" %}{% endif %}
-      </td>
-    </tr>
-  {% endfor %}
-  </tbody>
-</table>
-
-<p class="s4t-muted">
-  {% trans "Generated" %} <span id="s4t-generated">{{ generated_at }}</span>
-</p>
-
-<div class="s4t-backdrop" id="s4t-backdrop" style="display:none"></div>
-<div class="s4t-modal" id="s4t-modal" style="display:none" role="dialog" aria-modal="true">
-  <div class="s4t-modal-dialog">
-    <div class="s4t-modal-head">
-      <button class="s4t-x" id="s4t-x" aria-label="Close">&times;</button>
-      <h4 style="margin:0" id="s4t-title"></h4>
-      <div class="s4t-kv s4t-muted" id="s4t-sub"></div>
+<div class="dc-wrap">
+  <!-- ================================================ machine list -->
+  <div class="dc-list" aria-label="{% trans 'Machines' %}">
+    <div class="dc-tools">
+      <input type="search" class="form-control input-sm" id="dc-q"
+             placeholder="{% trans 'Filter by name or id' %}" autocomplete="off">
+      <div class="dc-seg" role="group" aria-label="{% trans 'Status filter' %}">
+        <button type="button" class="on" data-f="all">{% trans "All" %}</button>
+        <button type="button" data-f="online">{% trans "Online" %}</button>
+        <button type="button" data-f="offline">{% trans "Not online" %}</button>
+        <button type="button" data-f="pending">{% trans "Pending" %}</button>
+      </div>
     </div>
-    <div class="s4t-modal-body" id="s4t-body"></div>
-    <div class="s4t-modal-foot">
-      <span class="s4t-muted" id="s4t-live"></span>
-      <button class="btn btn-default btn-sm" id="s4t-close">{% trans "Close" %}</button>
+    <div class="dc-items" id="dc-items" role="listbox" tabindex="-1"></div>
+    {% comment %}Health is "when did this path last deliver something", not a green dot meaning a process is running.{% endcomment %}
+    <div class="dc-paths">
+      <h5>{% trans "Data paths" %} <small>{% trans "last delivery" %}</small></h5>
+      <div id="dc-paths"></div>
     </div>
   </div>
+
+  <!-- ================================================ selected machine -->
+  <div class="dc-detail" id="dc-detail">
+    <div class="dc-placeholder">{% trans "Select a machine on the left to see its twin, act on it, and follow its activity." %}</div>
+  </div>
+</div>
+
+<!-- typed / simple confirmation -->
+<div class="dc-backdrop" id="dc-cback" style="display:none"></div>
+<div class="dc-modal" id="dc-confirm" style="display:none" role="dialog" aria-modal="true" aria-labelledby="dc-ctitle">
+  <div class="dc-dialog">
+    <div class="h"><h4 id="dc-ctitle"></h4></div>
+    <div class="b" id="dc-cbody"></div>
+    <div class="f">
+      <button type="button" class="btn btn-default btn-sm" id="dc-cno">{% trans "Cancel" %}</button>
+      <button type="button" class="btn btn-primary btn-sm" id="dc-cyes"></button>
+    </div>
+  </div>
+</div>
+
 </div>
 
 <script>
 (function () {
-  var DATA = "data/", BOARD = "board/";
-  var open = null, timer = null, seen = 0;
+  "use strict";
+  var CFG = {{ config_json|safe }};
+  var CSRF = "{{ csrf_token }}";
+  var ACT = {}; CFG.actions.forEach(function (a) { ACT[a.key] = a; });
 
+  var boards = CFG.boards || [];       // latest list
+  var totals = CFG.totals || {}, health = CFG.health || [];
+  var sel = null;                      // selected uuid
+  var filter = "all", query = "";
+  var twin = null;                     // latest twin status of the selected board
+  var staged = {};                     // property -> value waiting for review
+  var attrsOpen = false;                // keep the attributes open across refreshes
+  var cmdLog = {};                     // uuid -> commands run in this session
+  var timers = [];
+  var lastListOk = null;
+
+  // ---------------------------------------------------------------- utils
   function esc(s) {
     return String(s === null || s === undefined ? "" : s)
       .replace(/&/g, "&amp;").replace(/</g, "&lt;").replace(/>/g, "&gt;")
-      .replace(/"/g, "&quot;");
+      .replace(/"/g, "&quot;").replace(/'/g, "&#39;");
   }
   function val(v) {
     if (v === null || v === undefined) { return ""; }
     return (typeof v === "object") ? JSON.stringify(v) : String(v);
   }
-
-  // ---- twin properties -------------------------------------------------
-  // Reported and desired side by side, because that pair IS the twin: the
-  // device owns the left column, an operator owns the right one, and the
-  // interesting moment is when they disagree. Two separate tables would hide
-  // exactly the thing worth seeing.
-  function propsTable(reported, desired) {
-    reported = reported || {}; desired = desired || {};
-    var keys = Object.keys(reported).concat(Object.keys(desired))
-      .filter(function (k, i, a) { return a.indexOf(k) === i; }).sort();
-    if (!keys.length) {
-      return '<p class="s4t-muted">Nothing reported and nothing desired.</p>';
-    }
-    return '<table class="s4t-tbl"><thead><tr>' +
-      '<th style="width:34%">Property</th><th style="width:33%">Reported</th>' +
-      '<th style="width:33%">Desired</th></tr></thead><tbody>' +
-      keys.map(function (k) {
-        var r = val(reported[k]), dv = val(desired[k]);
-        var differs = (k in desired) && r !== dv;
-        return '<tr' + (differs ? ' class="s4t-diff"' : '') + '>' +
-          '<td>' + esc(k) + '</td>' +
-          '<td class="s4t-kv">' + (k in reported ? esc(r) :
-            '<span class="s4t-muted">-</span>') + '</td>' +
-          '<td class="s4t-kv">' + (k in desired ? esc(dv) :
-            '<span class="s4t-muted">-</span>') + '</td></tr>';
-      }).join("") + '</tbody></table>';
+  // Booleans read as an operator would say them, everywhere on the page.
+  function show(v, rule) {
+    if (typeof v === "boolean" && (!rule || rule.type === "boolean")) { return v ? "ON" : "OFF"; }
+    return val(v);
   }
-  function attrTable(attrs) {
-    var keys = attrs ? Object.keys(attrs).sort() : [];
-    if (!keys.length) { return '<p class="s4t-muted">No attributes.</p>'; }
-    return '<table class="s4t-tbl"><tbody>' + keys.map(function (k) {
-      return '<tr><td style="width:34%">' + esc(k) + '</td><td class="s4t-kv">' +
-             esc(val(attrs[k])) + '</td></tr>';
+  function rule(n) { return twin && twin.allowed ? twin.allowed[n] : null; }
+  // Audit timestamps are UTC; show them in local time like everything else.
+  function localTime(ts) {
+    var d = new Date(ts);
+    return isNaN(d.getTime()) ? (ts || "").slice(11, 19) : d.toTimeString().slice(0, 8);
+  }
+  function $(id) { return document.getElementById(id); }
+  function byId(uuid) {
+    for (var i = 0; i < boards.length; i++) { if (boards[i].uuid === uuid) { return boards[i]; } }
+    return null;
+  }
+  function hhmmss(d) { return d.toTimeString().slice(0, 8); }
+  function stClass(b) { return b.online ? "online" : (b.status === "offline" ? "offline" : "other"); }
+  function stWord(b) { return b.online ? "Online" : (b.status ? b.status.charAt(0).toUpperCase() + b.status.slice(1) : "Unknown"); }
+  function pendingCount(b) {
+    var n = 0, d = b.desired || {}, r = b.reported || {};
+    Object.keys(d).forEach(function (k) { if (!(k in r) || val(r[k]) !== val(d[k])) { n++; } });
+    return n;
+  }
+  function call(method, url, body) {
+    var opt = {method: method, credentials: "same-origin",
+               headers: {"X-CSRFToken": CSRF, "Content-Type": "application/json",
+                         "X-Requested-With": "XMLHttpRequest"}};
+    if (body !== undefined) { opt.body = JSON.stringify(body); }
+    return fetch(url, opt).then(function (r) {
+      return r.text().then(function (t) {
+        var d; try { d = JSON.parse(t); } catch (e) { d = {error: t.slice(0, 200)}; }
+        return {status: r.status, ok: r.ok, data: d || {}};
+      });
+    });
+  }
+
+  // ------------------------------------------------------------ the list
+  function visible(b) {
+    if (query) {
+      var q = query.toLowerCase();
+      if ((b.name || "").toLowerCase().indexOf(q) < 0 && b.uuid.indexOf(q) < 0) { return false; }
+    }
+    if (filter === "online") { return b.online; }
+    if (filter === "offline") { return !b.online; }
+    if (filter === "pending") { return pendingCount(b) > 0; }
+    return true;
+  }
+  function renderStrip() {
+    var on = 0, pend = 0;
+    boards.forEach(function (b) { if (b.online) { on++; } if (pendingCount(b)) { pend++; } });
+    $("dc-n-all").textContent = boards.length;
+    $("dc-n-online").textContent = on;
+    $("dc-n-offline").textContent = boards.length - on;
+    $("dc-n-pending").textContent = pend;
+    $("dc-n-agents").textContent = totals.agents_seen !== undefined ? totals.agents_seen
+      : boards.filter(function (b) { return b.lr_version; }).length;
+    $("dc-n-twin").textContent = totals.with_twin !== undefined ? totals.with_twin
+      : boards.filter(function (b) { return b.twin; }).length;
+    $("dc-n-audit").textContent = totals.audit_records !== undefined && totals.audit_records !== null
+      ? totals.audit_records : "-";
+    var f = $("dc-fresh");
+    if (lastListOk) {
+      var age = Math.round((Date.now() - lastListOk) / 1000);
+      f.innerHTML = age > 20
+        ? '<span style="color:#a3302b;font-weight:600">Data is ' + age + ' s old: the board list is not refreshing</span>'
+        : "Updated " + esc(hhmmss(new Date(lastListOk)));
+    }
+  }
+  function ago(sec) {
+    if (sec === null || sec === undefined) { return "-"; }
+    sec = Math.round(sec);
+    if (sec < 90) { return sec + " s ago"; }
+    if (sec < 5400) { return Math.round(sec / 60) + " min ago"; }
+    return Math.round(sec / 3600) + " h ago";
+  }
+  function renderPaths() {
+    $("dc-paths").innerHTML = health.length ? health.map(function (h) {
+      var old = h.age_seconds !== null && h.age_seconds !== undefined && h.age_seconds > 600;
+      return '<div class="dc-path"><div class="w">' + esc(h.name) + '<div>' + esc(h.detail) + '</div></div>' +
+        '<div class="a' + (old ? " old" : "") + '">' + esc(ago(h.age_seconds)) + '</div></div>';
+    }).join("") : '<span class="dc-sub" style="font-size:12px">No path information.</span>';
+  }
+  function freshness(b) {
+    if (!b.twin) { return ""; }
+    if (b.age === null || b.age === undefined) { return '<span class="dc-sub">no report yet</span>'; }
+    return b.stale ? '<span class="dc-stale">reported ' + esc(b.age) + ' ago (stale)</span>'
+                   : 'reported ' + esc(b.age) + ' ago';
+  }
+  function renderList() {
+    var rows = boards.filter(visible);
+    if (!rows.length) {
+      $("dc-items").innerHTML = '<div class="dc-empty">' +
+        (boards.length ? "No machine matches the filter." : "No machines registered.") + '</div>';
+      return;
+    }
+    $("dc-items").innerHTML = rows.map(function (b) {
+      var p = pendingCount(b), c = stClass(b);
+      return '<div class="dc-item' + (b.uuid === sel ? " sel" : "") + '" role="option" tabindex="0"' +
+        ' aria-selected="' + (b.uuid === sel) + '" data-uuid="' + esc(b.uuid) + '">' +
+        '<span class="dc-st ' + c + '" aria-hidden="true"></span>' +
+        '<div><div class="n">' + esc(b.name) + '</div>' +
+        '<div class="m">' + esc(b.type || "board") + (b.lr_version ? " &middot; agent " + esc(b.lr_version) : "") + '</div>' +
+        (b.twin ? '<div class="m">' + freshness(b) + '</div>' : '<div class="m dc-stale">no twin</div>') + '</div>' +
+        '<div class="s"><span class="dc-stw ' + c + '">' + esc(stWord(b)) + '</span>' +
+        (p ? '<br><span class="dc-pend">' + p + ' pending</span>' : "") + '</div></div>';
+    }).join("");
+  }
+  $("dc-items").addEventListener("click", function (ev) {
+    var it = ev.target.closest ? ev.target.closest(".dc-item") : null;
+    if (it) { select(it.getAttribute("data-uuid")); }
+  });
+  $("dc-items").addEventListener("keydown", function (ev) {
+    if (ev.key !== "ArrowDown" && ev.key !== "ArrowUp" && ev.key !== "Enter") { return; }
+    var items = Array.prototype.slice.call($("dc-items").querySelectorAll(".dc-item"));
+    var i = items.indexOf(document.activeElement);
+    if (ev.key === "Enter" && i >= 0) { select(items[i].getAttribute("data-uuid")); return; }
+    var j = ev.key === "ArrowDown" ? Math.min(items.length - 1, i + 1) : Math.max(0, i - 1);
+    if (items[j]) { items[j].focus(); select(items[j].getAttribute("data-uuid"), true); }
+    ev.preventDefault();
+  });
+  $("dc-q").addEventListener("input", function () { query = this.value.trim(); renderList(); });
+  Array.prototype.forEach.call(document.querySelectorAll(".dc-seg button"), function (b) {
+    b.addEventListener("click", function () {
+      Array.prototype.forEach.call(document.querySelectorAll(".dc-seg button"),
+        function (x) { x.classList.remove("on"); });
+      b.classList.add("on"); filter = b.getAttribute("data-f"); renderList();
+    });
+  });
+
+  // ---------------------------------------------------------- the detail
+  function select(uuid, keepFocus) {
+    if (sel !== uuid) { staged = {}; twin = null; }
+    sel = uuid;
+    try { window.history.replaceState(null, "", "?board=" + encodeURIComponent(uuid)); } catch (e) {}
+    renderList();
+    if (keepFocus) {
+      var el = $("dc-items").querySelector('.dc-item[data-uuid="' + uuid + '"]');
+      if (el) { el.focus(); }
+    }
+    renderDetail();
+    loadTwin();
+  }
+
+  function renderDetail() {
+    var b = byId(sel);
+    if (!b) {
+      $("dc-detail").innerHTML = '<div class="dc-placeholder">Select a machine on the left to see its twin, act on it, and follow its activity.</div>';
+      return;
+    }
+    var c = stClass(b);
+    $("dc-detail").innerHTML =
+      '<div class="dc-card dc-head">' +
+        '<a class="btn btn-default btn-sm dc-loglink" href="board/' + encodeURIComponent(b.uuid) + '/log/"' +
+        ' title="Every recorded action on this machine, with search and filters">Activity log &rarr;</a>' +
+        '<h3>' + esc(b.name) + '</h3><div class="dc-mono dc-sub">' + esc(b.uuid) + '</div>' + plateLine(b) +
+        '<div class="dc-facts">' +
+          '<div><span class="k">Status</span><i class="dc-st ' + c + '" style="margin:0 6px 0 0;vertical-align:-1px"></i><b class="dc-stw ' + c + '" id="dc-f-status">' + esc(stWord(b)) + '</b></div>' +
+          '<div><span class="k">Type</span>' + esc(b.type || "-") + '</div>' +
+          '<div><span class="k">Agent</span>' + (b.lr_version ? esc(b.lr_version) : '<span class="dc-sub">never connected</span>') + '</div>' +
+          '<div><span class="k">Twin</span><span id="dc-f-rev">' + (b.twin ? (b.revision ? "revision " + esc(b.revision) : "present") : "missing") + '</span></div>' +
+          '<div><span class="k">Last report</span><span id="dc-f-age">' + (freshness(b) || "-") + '</span></div>' +
+          '<div><span class="k">Last action</span><span id="dc-f-last">' + lastAction(b) + '</span></div>' +
+          (b.fleet ? '<div><span class="k">Fleet</span>' + esc(b.fleet) + '</div>' : "") +
+          '<div id="dc-f-machine-wrap" style="display:none"><span class="k">Machine</span><span id="dc-f-machine"></span></div>' +
+        '</div>' + attrsBlock(b) +
+      '</div>' +
+      '<div id="dc-banner"></div>' +
+      '<div class="dc-card"><h4>Desired state <small>what the machine is asked to be, through its digital twin</small>' +
+        '<span class="r dc-sub" id="dc-twin-live"></span></h4>' +
+        '<div class="dc-body" id="dc-twin"><span class="dc-sub">Loading&hellip;</span></div></div>' +
+      '<div class="dc-card"><h4>Device commands <small>sent to the machine\'s agent through IoTronic</small></h4>' +
+        '<div class="dc-cmds" id="dc-cmds"></div></div>' +
+      '<div class="dc-card" id="dc-minecard" style="display:none"><h4>Your commands <small>this session, on this machine</small>' +
+        '<span class="r"><a href="board/' + encodeURIComponent(b.uuid) + '/log/">Full activity log &rarr;</a></span></h4>' +
+        '<div class="dc-body" id="dc-mine"></div></div>';
+    renderBanner(); renderCommands(); renderHistory();
+  }
+
+  function lastAction(b) {
+    if (!b.last_action) { return '<span class="dc-sub">none recorded</span>'; }
+    return '<span class="dc-mono">' + esc(b.last_action) + '</span>' +
+      (b.last_operator ? " by " + esc(b.last_operator) : "") +
+      ' <span class="dc-sub">(' + esc(b.audit_count) + ' records)</span>';
+  }
+  // Twin attributes as a key/value table. A nested object or list opens as a
+  // table of its own instead of one long line of JSON, and long values wrap
+  // inside their cell, so nothing runs off the screen.
+  function kvTable(obj, depth) {
+    var keys = Object.keys(obj);
+    if (!keys.length) { return '<span class="dc-sub">' + (Array.isArray(obj) ? "empty list" : "empty") + '</span>'; }
+    if (!Array.isArray(obj)) { keys.sort(); }
+    return '<table class="dc-kv' + (depth ? " nested" : "") + '"><tbody>' + keys.map(function (k) {
+      var v = obj[k], cell;
+      if (v !== null && typeof v === "object" && depth < 4) { cell = kvTable(v, depth + 1); }
+      else if (v === null || v === undefined || v === "") { cell = '<span class="dc-sub">' + (v === "" ? "(empty)" : "null") + '</span>'; }
+      else { cell = '<span class="dc-mono">' + esc(typeof v === "object" ? JSON.stringify(v) : String(v)) + '</span>'; }
+      return '<tr><th scope="row">' + esc(Array.isArray(obj) ? "[" + k + "]" : k) + '</th><td>' + cell + '</td></tr>';
     }).join("") + '</tbody></table>';
   }
+  function attrsBlock(b) {
+    var keys = Object.keys(b.attributes || {});
+    if (!keys.length) { return ""; }
+    // The owner is stored as a Keystone user id; show it as "name (id)" when
+    // the server could resolve the name, otherwise the id alone.
+    var shown = {};
+    keys.forEach(function (k) { shown[k] = b.attributes[k]; });
+    if (b.owner_name && shown.owner) { shown.owner = b.owner_name + " (" + shown.owner + ")"; }
+    return '<details class="dc-attrs"' + (attrsOpen ? " open" : "") + '><summary>Twin attributes (' + keys.length + ')</summary>' +
+      '<div class="dc-kvwrap">' + kvTable(shown, 0) + '</div></details>';
+  }
+  function renderBanner() {
+    var b = byId(sel), el = $("dc-banner");
+    if (!b || !el) { return; }
+    if (!b.twin) {
+      el.innerHTML = '<div class="dc-banner bad"><strong>No digital twin.</strong> ' +
+        'Desired state is unavailable until the provisioner creates one (about 30 s after the board is registered).</div>';
+    } else if (!b.online) {
+      el.innerHTML = '<div class="dc-banner"><strong>This machine is ' + esc(b.status || "not online") + '.</strong> ' +
+        'Device commands are unavailable. Desired values can still be set; they wait until the machine reconnects.</div>';
+    } else { el.innerHTML = ""; }
+  }
 
-  // ---- activity --------------------------------------------------------
-  function actionsTable(events, highlightAbove) {
-    if (!events || !events.length) {
-      return '<p class="s4t-muted">No audit records for this board yet.</p>';
+  // ---- commands ---------------------------------------------------------
+  function cmdRow(a, b) {
+    var reason = !b.online ? "Machine not online"
+               : (a.admin && !CFG.is_admin ? "Requires role: " + CFG.admin_roles : "");
+    return '<div class="dc-cmd"><button type="button" class="btn btn-sm btn-default' +
+      (a.group === "maintenance" ? " dc-risk" : "") + '" data-cmd="' + esc(a.key) + '"' +
+      (reason ? " disabled" : "") + '>' + esc(a.label) + (a.confirm ? "&hellip;" : "") + '</button>' +
+      '<div><div class="t">' + esc(a.help) + '</div>' +
+      (reason ? '<div class="lock">' + esc(reason) + '</div>' : "") + '</div></div>';
+  }
+  function renderCommands() {
+    var b = byId(sel), el = $("dc-cmds");
+    if (!b || !el) { return; }
+    var diag = CFG.actions.filter(function (a) { return a.group === "diagnostics"; });
+    var mnt = CFG.actions.filter(function (a) { return a.group === "maintenance"; });
+    el.innerHTML =
+      '<div class="dc-grp"><h5>Diagnostics &middot; change nothing</h5>' + diag.map(function (a) { return cmdRow(a, b); }).join("") + '</div>' +
+      '<div class="dc-grp"><h5>Maintenance &middot; interrupts the machine</h5>' + mnt.map(function (a) { return cmdRow(a, b); }).join("") + '</div>';
+  }
+  document.addEventListener("click", function (ev) {
+    var btn = ev.target.closest ? ev.target.closest("button[data-cmd]") : null;
+    if (!btn || btn.disabled || !sel) { return; }
+    var a = ACT[btn.getAttribute("data-cmd")], b = byId(sel);
+    if (!a.confirm) { runCommand(b, a); return; }
+    confirmTyped(a.label + ": " + b.name,
+      "<p>" + esc(a.help) + "</p>" +
+      "<p>Machine <strong>" + esc(b.name) + "</strong><br><span class='dc-mono dc-sub'>" + esc(b.uuid) + "</span></p>",
+      b.name, a.label, function () { runCommand(b, a); });
+  });
+  function runCommand(b, a) {
+    var entry = {key: a.key, label: a.label, t0: Date.now(), state: "run", text: "sending…"};
+    (cmdLog[b.uuid] = cmdLog[b.uuid] || []).unshift(entry);
+    if (cmdLog[b.uuid].length > 10) { cmdLog[b.uuid].pop(); }
+    renderHistory();
+    var body = {action: a.key};
+    if (a.key === "echo") { body.message = "Horizon " + new Date().toISOString(); }
+    call("POST", "board/" + b.uuid + "/action/", body).then(function (r) {
+      var secs = ((Date.now() - entry.t0) / 1000).toFixed(1);
+      if (r.ok && r.data.ok) {
+        entry.state = "ok"; entry.text = "done in " + secs + " s";
+        entry.detail = r.data.result && (r.data.result.result !== undefined ? r.data.result.result : r.data.result);
+      } else {
+        entry.state = "bad"; entry.text = "failed (" + r.status + "): " + (r.data.error || "see detail");
+        entry.detail = r.data.result;
+      }
+      renderHistory();
+    }).catch(function (e) { entry.state = "bad"; entry.text = "failed: " + e; renderHistory(); });
+  }
+
+  // ---- desired state (twin) ---------------------------------------------
+  function stateCell(p) {
+    if (!p) { return '<span class="dc-state idle">no request</span>'; }
+    if (p.state === "converged") { return '<span class="dc-state converged">&#10003; reached</span>'; }
+    if (p.state === "unconfirmed") {
+      return '<span class="dc-state unconfirmed">&#9888; not confirmed after ' + Math.round(p.pending_seconds) + ' s</span>';
     }
-    return '<table class="s4t-tbl"><thead><tr>' +
-      '<th style="width:20%">Time (UTC)</th><th style="width:22%">Action</th>' +
-      '<th style="width:16%">By</th><th style="width:14%">Outcome</th>' +
-      '<th style="width:20%">Detail</th><th>Seq</th></tr></thead><tbody>' +
-      events.map(function (e) {
-        var a = e.action || {}, actor = e.actor || {};
-        var failed = a.outcome && a.outcome !== "success";
-        var isNew = highlightAbove && e.sequence > highlightAbove;
-        var detail = a.target || "";
-        if (!detail && a.detail) { detail = JSON.stringify(a.detail); }
-        return '<tr' + (isNew ? ' class="s4t-new"' : '') + '>' +
-          '<td class="s4t-kv s4t-muted">' +
-            esc((e.timestamp || "").replace("T", " ").slice(0, 19)) + '</td>' +
-          '<td class="s4t-kv">' + esc(e.machine_action) + '</td>' +
-          '<td>' + (e.operator_name ? esc(e.operator_name) :
-            '<span class="s4t-muted">' + esc(actor.type || "-") + '</span>') + '</td>' +
-          '<td class="' + (failed ? "s4t-fail" : "") + '">' + esc(a.outcome || "") +
-            (a.status_code ? " " + esc(a.status_code) : "") + '</td>' +
-          '<td class="s4t-kv s4t-muted" title="' + esc(detail) + '">' +
-            esc(detail.length > 40 ? detail.slice(0, 40) + "..." : detail) + '</td>' +
-          '<td class="s4t-kv s4t-muted">#' + esc(e.sequence) + '</td></tr>';
+    return '<span class="dc-state pending">&#9719; waiting' +
+      (p.pending_seconds !== null && p.pending_seconds !== undefined ? " " + Math.round(p.pending_seconds) + " s" : "") + '</span>';
+  }
+  function control(name, rule, current) {
+    if (rule.type === "boolean") {
+      var v = (name in staged) ? staged[name] : current;
+      return '<div class="btn-group btn-group-xs" role="group">' +
+        [true, false].map(function (opt) {
+          return '<button type="button" class="btn btn-default' + (v === opt ? " active" : "") +
+            '" data-stage="' + esc(name) + '" data-v="' + opt + '">' + (opt ? "ON" : "OFF") + '</button>';
+        }).join("") + '</div>';
+    }
+    if (rule.enum) {
+      return '<select class="form-control input-sm" data-stage-in="' + esc(name) + '">' +
+        rule.enum.map(function (o) {
+          // the current value is shown selected, as the ON/OFF buttons are
+          var cur = (name in staged) ? staged[name] : current;
+          return '<option value="' + esc(JSON.stringify(o)) + '"' +
+            (cur === o ? " selected" : "") + '>' + esc(o) + '</option>';
+        }).join("") + '</select>';
+    }
+    var num = rule.type === "integer" || rule.type === "number";
+    return '<input class="form-control input-sm" data-stage-in="' + esc(name) + '" type="' + (num ? "number" : "text") + '"' +
+      (rule.min !== undefined ? ' min="' + esc(rule.min) + '"' : "") +
+      (rule.max !== undefined ? ' max="' + esc(rule.max) + '"' : "") +
+      (rule.type === "integer" ? ' step="1"' : (num ? ' step="any"' : "")) +
+      ' placeholder="' + esc(rule.min !== undefined ? rule.min + "–" + rule.max : "value") + '"' +
+      ((name in staged) ? ' value="' + esc(staged[name]) + '"' : "") + '>' +
+      (rule.unit ? '<span class="dc-sub">' + esc(rule.unit) + '</span>' : "");
+  }
+  // ---- presenting machine data ---------------------------------------------
+  // Values the card shows in their own place, not in the measurement grid.
+  var SPECIAL = ["machine_state", "alarm_code", "alarm_text", "restart_interlock"];
+  // The order an operator scans a machine in: what it is doing, how hard,
+  // how hot, how worn, what it produced.
+  var ORDER = ["spindle_speed_rpm", "torque_nm", "spindle_power_kw", "process_temperature_c",
+               "air_temperature_c", "vibration_mm_s", "tool_wear_min", "tool_life_remaining_min",
+               "parts_produced", "operating_hours", "energy_kwh", "temperature"];
+  // Units are carried in the property name (spindle_speed_rpm), the same
+  // convention the simulated machine and the AI4I dataset use.
+  var UNITS = [["_mm_s", "mm/s"], ["_rpm", "rpm"], ["_nm", "N\u00b7m"], ["_kwh", "kWh"], ["_kw", "kW"],
+               ["_c", "\u00b0C"], ["_k", "K"], ["_pct", "%"], ["_min", "min"], ["_s", "s"]];
+  function suffixOf(name) {
+    for (var i = 0; i < UNITS.length; i++) {
+      var sfx = UNITS[i][0];
+      if (name.length > sfx.length && name.slice(-sfx.length) === sfx) { return UNITS[i]; }
+    }
+    return null;
+  }
+  function unitOf(name, r) {
+    var u = (r && r.unit) || (suffixOf(name) || [])[1] || (name === "operating_hours" ? "h" : "");
+    return u ? ' <span class="dc-sub">' + esc(u) + '</span>' : "";
+  }
+  function label(name) {
+    var sx = suffixOf(name), base = sx ? name.slice(0, -sx[0].length) : name;
+    base = base.replace(/_/g, " ");
+    return base.charAt(0).toUpperCase() + base.slice(1);
+  }
+  function fmtNum(v) {
+    if (typeof v !== "number") { return show(v); }
+    return Math.abs(v) >= 1000 ? Math.round(v).toLocaleString() : String(v);
+  }
+  // Vibration severity zones after ISO 10816 (mm/s RMS). Word AND colour.
+  function zone(name, v) {
+    if (name !== "vibration_mm_s" || typeof v !== "number") { return null; }
+    if (v >= 7.1) { return ["dc-z-bad", "danger"]; }
+    if (v >= 2.8) { return ["dc-z-warn", "alert"]; }
+    return null;
+  }
+  function plateLine(b) {
+    var mc = (b.attributes || {}).machine;
+    if (!mc || typeof mc !== "object") { return ""; }
+    var loc = mc.location || {};
+    var where = [loc.site, loc.line, loc.cell].filter(Boolean).join(" / ");
+    return '<div class="dc-sub" style="margin-top:4px;font-size:13px">' + esc(mc.model || "") +
+      (mc.serial_number ? " &middot; S/N " + esc(mc.serial_number) : "") + (where ? " &middot; " + esc(where) : "") +
+      (mc.simulated ? ' <span class="dc-chip">simulated</span>' : "") + '</div>';
+  }
+  var MSTATE = {running: "online", idle: "other", stopping: "other", maintenance: "offline", alarm: "offline"};
+  function renderMachineState() {
+    var w = $("dc-f-machine-wrap"), el = $("dc-f-machine");
+    var ms = twin && twin.reported ? twin.reported.machine_state : null;
+    if (!w || !el) { return; }
+    if (!ms) { w.style.display = "none"; return; }
+    w.style.display = "";
+    var bad = ms === "alarm";
+    el.innerHTML = '<i class="dc-st ' + (MSTATE[ms] || "other") + '" style="margin:0 6px 0 0;vertical-align:-1px"></i>' +
+      '<b' + (bad ? ' style="color:#a3302b"' : "") + '>' + esc(ms.charAt(0).toUpperCase() + ms.slice(1)) +
+      (bad && twin.reported.alarm_code ? " " + esc(twin.reported.alarm_code) : "") + '</b>';
+  }
+  function renderTwin() {
+    var el = $("dc-twin");
+    if (!el || !twin) { return; }
+    var rows = {}; (twin.properties || []).forEach(function (p) { rows[p.property] = p; });
+    var names = Object.keys(twin.allowed || {}).concat(Object.keys(twin.desired || {}))
+      .filter(function (k, i, a) { return a.indexOf(k) === i; }).sort();
+    var h = "";
+    if (!names.length) {
+      h = '<p class="dc-sub">No property of this machine can be set from here. ' +
+          'The allow list (conf_twin/twin_allowlist.json) has no entry for its type.</p>';
+    } else {
+      h = '<table class="dc-tbl"><thead><tr><th style="width:26%">Property</th><th>Reported</th>' +
+          '<th>Requested</th><th>Status</th><th style="width:30%">' + (twin.can_write ? "Change" : "") + '</th></tr></thead><tbody>' +
+        names.map(function (n) {
+          var rule = (twin.allowed || {})[n], p = rows[n];
+          var rep = twin.reported || {}, hasRep = n in rep;
+          var current = (n in (twin.desired || {})) ? twin.desired[n] : rep[n];
+          var ctl = "";
+          if (twin.can_write && rule) { ctl = '<div class="dc-ctl">' + control(n, rule, current) + '</div>'; }
+          else if (twin.can_write && !rule) { ctl = '<span class="dc-sub" style="font-size:12px">not on the allow list</span>'; }
+          if (twin.can_write && p) {
+            ctl += '<div style="margin-top:4px"><button type="button" class="dc-link" data-withdraw="' + esc(n) + '">withdraw request</button></div>';
+          }
+          return '<tr' + ((n in staged) ? ' class="staged"' : "") + '><td><strong>' + esc(label(n)) + '</strong>' +
+            (label(n).toLowerCase().replace(/ /g, "_") !== n ? ' <span class="dc-mono dc-sub" style="font-size:11px">' + esc(n) + '</span>' : "") +
+            (rule && rule.description ? '<div class="desc">' + esc(rule.description) + '</div>' : "") + '</td>' +
+            '<td class="dc-mono">' + (hasRep ? esc(show(rep[n], rule)) + unitOf(n, rule) : '<span class="dc-sub">not reported</span>') + '</td>' +
+            '<td class="dc-mono">' + (p ? esc(show(p.desired, rule)) + unitOf(n, rule) : '<span class="dc-sub">-</span>') + '</td>' +
+            '<td>' + stateCell(p) + '</td><td>' + ctl + '</td></tr>';
+        }).join("") + '</tbody></table>';
+    }
+    var keys = Object.keys(staged);
+    if (keys.length) {
+      h += '<div class="dc-review"><div class="chg"><strong>' + keys.length + ' change' + (keys.length > 1 ? "s" : "") +
+           ' ready:</strong> ' + keys.map(function (k) {
+             var rep = (twin.reported || {})[k];
+             return '<span class="dc-mono">' + esc(k) + ' ' + esc(show(rep, rule(k))) + ' &rarr; <b>' + esc(show(staged[k], rule(k))) + '</b></span>';
+           }).join(", ") + '</div>' +
+           '<button type="button" class="btn btn-default btn-sm" id="dc-discard">Discard</button>' +
+           '<button type="button" class="btn btn-primary btn-sm" id="dc-apply">Send to machine&hellip;</button></div>';
+    } else if (!twin.can_write) {
+      h += '<p class="dc-sub" style="margin:10px 0 0">Your role can view desired state but not change it.</p>';
+    }
+    var rp = twin.reported || {};
+    var tele = Object.keys(rp).filter(function (k) {
+      return names.indexOf(k) < 0 && SPECIAL.indexOf(k) < 0;
+    }).sort(function (x, y) {
+      var a = ORDER.indexOf(x), b = ORDER.indexOf(y);
+      return (a < 0 ? 999 : a) - (b < 0 ? 999 : b) || (x < y ? -1 : 1);
+    });
+    if (tele.length) {
+      h += '<div class="dc-tele">' + tele.map(function (k) {
+        var z = zone(k, rp[k]);
+        return '<div><span>' + esc(label(k)) + '</span><b class="dc-mono' + (z ? " " + z[0] : "") + '">' +
+          esc(fmtNum(rp[k])) + unitOf(k) + (z ? ' <small>' + esc(z[1]) + '</small>' : "") + '</b></div>';
+      }).join("") + '</div>';
+    }
+    // An alarm or an interlock comes FIRST: it is the one thing on this card
+    // the operator must act on, and it explains why "run" is not reached.
+    if (rp.alarm_code) {
+      h = '<div class="dc-banner bad" role="alert"><strong>Machine alarm ' + esc(rp.alarm_code) + ':</strong> ' +
+          esc(rp.alarm_text || "") + '. The spindle has stopped.<br>To recover: set <b>mode</b> to ' +
+          '<b>maintenance</b> (clears the alarm and changes the tool), then mode <b>auto</b>, then <b>run</b> OFF and ON.</div>' + h;
+    } else if (rp.restart_interlock) {
+      h = '<div class="dc-banner"><strong>Restart interlock.</strong> After an alarm the machine does not restart on ' +
+          'its own: switch <b>run</b> OFF, then ON.</div>' + h;
+    }
+    // Do not rebuild while someone is typing in a value box: it would steal
+    // the focus and the half-typed number.
+    var a = document.activeElement;
+    if (a && a.getAttribute && a.getAttribute("data-stage-in") && el.contains(a)) { return; }
+    el.innerHTML = h;
+  }
+  $("dc-detail").addEventListener("click", function (ev) {
+    var t = ev.target;
+    if (t.getAttribute("data-stage")) {
+      var n = t.getAttribute("data-stage"), v = t.getAttribute("data-v") === "true";
+      var cur = (n in (twin.desired || {})) ? twin.desired[n] : (twin.reported || {})[n];
+      if (v === cur) { delete staged[n]; } else { staged[n] = v; }
+      renderTwin(); return;
+    }
+    if (t.getAttribute("data-withdraw")) {
+      var p = t.getAttribute("data-withdraw"), uuid = sel; t.disabled = true;
+      call("POST", "board/" + uuid + "/twin/clear/" + encodeURIComponent(p) + "/").then(function (r) {
+        logLocal(uuid, "Withdraw " + p, r.ok ? "ok" : "bad", r.ok ? "request withdrawn" : "failed (" + r.status + "): " + (r.data.error || ""));
+        loadTwin();
+      }).catch(function (e) { t.disabled = false; logLocal(uuid, "Withdraw " + p, "bad", "failed: " + e); });
+      return;
+    }
+    if (t.id === "dc-discard") { staged = {}; renderTwin(); return; }
+    if (t.id === "dc-apply") { reviewAndSend(); }
+  });
+  $("dc-detail").addEventListener("change", function (ev) {
+    var t = ev.target, n = t.getAttribute && t.getAttribute("data-stage-in");
+    if (!n) { return; }
+    var rule = twin.allowed[n], s = t.value;
+    if (s === "") { delete staged[n]; renderTwin(); return; }
+    var v = rule.enum ? JSON.parse(s) : rule.type === "integer" ? parseInt(s, 10)
+          : rule.type === "number" ? parseFloat(s) : s;
+    if (typeof v === "number" && isNaN(v)) { return; }
+    // choosing the value the machine already has is not a change
+    var cur = (n in (twin.desired || {})) ? twin.desired[n] : (twin.reported || {})[n];
+    if (v === cur) { delete staged[n]; } else { staged[n] = v; }
+    t.blur(); renderTwin();
+  });
+  function reviewAndSend() {
+    var b = byId(sel), props = {}, uuid = sel;
+    Object.keys(staged).forEach(function (k) { props[k] = staged[k]; });
+    confirmSimple("Send to " + b.name + "?",
+      "<p>The machine will be asked to change:</p><ul>" + Object.keys(props).map(function (k) {
+        return "<li class='dc-mono'>" + esc(k) + ": " + esc(show((twin.reported || {})[k], rule(k))) + " &rarr; <b>" + esc(show(props[k], rule(k))) + "</b></li>";
+      }).join("") + "</ul><p class='dc-sub'>The status shows <em>reached</em> once the machine reports the new value." +
+      (b.online ? "" : " The machine is not online now; the request waits until it reconnects.") + "</p>",
+      "Send", function () {
+        call("POST", "board/" + uuid + "/twin/set/", {properties: props}).then(function (r) {
+          if (r.ok) { if (sel === uuid) { staged = {}; } }
+          var d = r.data.details ? Object.keys(r.data.details).map(function (k) { return k + " " + r.data.details[k]; }).join("; ") : "";
+          logLocal(uuid, "Set " + Object.keys(props).join(", "), r.ok ? "ok" : "bad",
+                   r.ok ? "sent; waiting for the machine to report it" : "refused (" + r.status + "): " + (d || r.data.error || ""));
+          loadTwin();
+        }).catch(function (e) { logLocal(uuid, "Set desired", "bad", "failed: " + e); });
+      });
+  }
+  function loadTwin() {
+    var uuid = sel; if (!uuid) { return; }
+    var b = byId(uuid);
+    if (b && !b.twin) { var el = $("dc-twin"); if (el) { el.innerHTML = '<span class="dc-sub">No twin for this machine.</span>'; } return; }
+    call("GET", "board/" + uuid + "/twin/").then(function (r) {
+      if (sel !== uuid) { return; }
+      if (!r.ok) {
+        $("dc-twin-live") && ($("dc-twin-live").innerHTML = '<span style="color:#a3302b">' + esc(r.data.error || ("error " + r.status)) + '</span>');
+        if (!twin && $("dc-twin")) { $("dc-twin").innerHTML = '<span class="dc-sub">' + esc(r.data.error || "Desired state unavailable.") + '</span>'; }
+        return;
+      }
+      twin = r.data;
+      if ($("dc-twin-live")) { $("dc-twin-live").textContent = "updated " + hhmmss(new Date()); }
+      if ($("dc-f-rev") && twin.revision) { $("dc-f-rev").textContent = "revision " + twin.revision; }
+      renderTwin(); renderMachineState();
+    }).catch(function () {});
+  }
+
+  // "toggle" does not bubble, so listen in the capture phase.
+  $("dc-detail").addEventListener("toggle", function (ev) {
+    if (ev.target.classList && ev.target.classList.contains("dc-attrs")) { attrsOpen = ev.target.open; }
+  }, true);
+
+  // ---- your commands --------------------------------------------------------
+  // The outcome of what this operator just did, next to the controls that did
+  // it. The machine's full history lives on its Activity log page.
+  function logLocal(uuid, label, state, text) {
+    (cmdLog[uuid] = cmdLog[uuid] || []).unshift({label: label, t0: Date.now(), state: state, text: text});
+    if (cmdLog[uuid].length > 10) { cmdLog[uuid].pop(); }
+    if (uuid === sel) { renderHistory(); }
+  }
+  function renderHistory() {
+    var el = $("dc-mine"), card = $("dc-minecard"); if (!el || !card) { return; }
+    var mine = cmdLog[sel] || [];
+    card.style.display = mine.length ? "" : "none";
+    el.innerHTML = '<table class="dc-act"><colgroup><col style="width:90px"><col style="width:24%"><col></colgroup><tbody>' +
+      mine.map(function (e) {
+        return '<tr class="mine"><td class="dc-sub">' + esc(hhmmss(new Date(e.t0))) + '</td>' +
+          '<td><strong>' + esc(e.label) + '</strong></td>' +
+          '<td class="' + e.state + '">' + esc(e.text) +
+          (e.detail !== undefined && e.detail !== null ? '<pre>' + esc(typeof e.detail === "string" ? e.detail : JSON.stringify(e.detail, null, 2)) + '</pre>' : "") +
+          '</td></tr>';
       }).join("") + '</tbody></table>';
   }
 
-  function render(d, first) {
-    var twin = d.twin || {};
-    var tele = ((twin.features || {}).telemetry || {});
-    var events = d.events || [];
-    var maxSeq = events.length ? events[0].sequence : 0;
-
-    if (first) {
-      document.getElementById("s4t-body").innerHTML =
-        '<div class="s4t-sec">Twin properties</div>' +
-        '<div id="s4t-props">' + propsTable(tele.properties, tele.desiredProperties) + '</div>' +
-        '<div class="s4t-sec">Attributes</div>' +
-        '<div id="s4t-attrs">' + attrTable(twin.attributes) + '</div>' +
-        '<div class="s4t-sec">Actions</div>' +
-        '<div id="s4t-acts">' + actionsTable(events, 0) + '</div>';
-    } else {
-      document.getElementById("s4t-props").innerHTML =
-        propsTable(tele.properties, tele.desiredProperties);
-      document.getElementById("s4t-attrs").innerHTML = attrTable(twin.attributes);
-      // Anything above the highest sequence from the previous poll is new and
-      // flashes once, so a change that arrives while you are reading is
-      // visible rather than silently replacing what was there.
-      document.getElementById("s4t-acts").innerHTML = actionsTable(events, seen);
-    }
-    seen = maxSeq;
-
-    var sub = [];
-    if (twin._revision) { sub.push("twin revision " + twin._revision); }
-    if (twin._modified) { sub.push("last change " + twin._modified); }
-    document.getElementById("s4t-sub").textContent = sub.join("  |  ");
-    document.getElementById("s4t-live").innerHTML =
-      '<span class="s4t-dot"></span>live, updated ' +
-      new Date().toLocaleTimeString();
+  // ---- confirmation ---------------------------------------------------------
+  var onYes = null, typedTarget = null;
+  function openConfirm(title, html, yesLabel, danger) {
+    $("dc-ctitle").textContent = title;
+    $("dc-cbody").innerHTML = html;
+    var y = $("dc-cyes");
+    y.textContent = yesLabel; y.className = "btn btn-sm " + (danger ? "btn-danger" : "btn-primary");
+    $("dc-cback").style.display = ""; $("dc-confirm").style.display = "";
   }
-
-  function load(uuid, first) {
-    fetch(BOARD + encodeURIComponent(uuid) + "/?limit=100",
-          {credentials: "same-origin"})
-      .then(function (r) { return r.json(); })
-      .then(function (d) {
-        if (open !== uuid) { return; }        // a different board was opened
-        if (d.error) {
-          document.getElementById("s4t-live").innerHTML =
-            '<span class="s4t-stale">' + esc(d.error) + '</span>';
-          return;
-        }
-        render(d, first);
-      })
-      .catch(function (e) {
-        document.getElementById("s4t-live").innerHTML =
-          '<span class="s4t-stale">Could not load: ' + esc(e) + '</span>';
-      });
+  function confirmSimple(title, html, yesLabel, go) {
+    onYes = go; typedTarget = null;
+    openConfirm(title, html, yesLabel, false);
+    $("dc-cyes").disabled = false; $("dc-cyes").focus();
   }
-
-  function show(uuid, name) {
-    open = uuid; seen = 0;
-    document.getElementById("s4t-title").textContent = name;
-    document.getElementById("s4t-sub").textContent = uuid;
-    document.getElementById("s4t-body").innerHTML =
-      '<p class="s4t-muted">Loading...</p>';
-    document.getElementById("s4t-live").textContent = "";
-    document.getElementById("s4t-backdrop").style.display = "";
-    document.getElementById("s4t-modal").style.display = "";
-    load(uuid, true);
-    // Three seconds while open. The dialog is the one place a person is
-    // actually watching, so it polls faster than the table behind it.
-    timer = setInterval(function () { load(uuid, false); }, 3000);
+  function confirmTyped(title, html, mustType, yesLabel, go) {
+    onYes = go; typedTarget = mustType;
+    openConfirm(title, html + "<label for='dc-typed' style='font-weight:400'>Type the machine name <b>" + esc(mustType) +
+      "</b> to confirm</label><input id='dc-typed' class='form-control input-sm' autocomplete='off'>", yesLabel, true);
+    $("dc-cyes").disabled = true;
+    $("dc-typed").addEventListener("input", function () { $("dc-cyes").disabled = this.value !== typedTarget; });
+    $("dc-typed").focus();
   }
-  function hide() {
-    open = null;
-    if (timer) { clearInterval(timer); timer = null; }
-    document.getElementById("s4t-backdrop").style.display = "none";
-    document.getElementById("s4t-modal").style.display = "none";
-  }
-
-  document.getElementById("s4t-rows").addEventListener("click", function (ev) {
-    var tr = ev.target.closest ? ev.target.closest("tr.s4t-board") : null;
-    if (tr) { show(tr.getAttribute("data-uuid"), tr.getAttribute("data-name")); }
-  });
-  document.getElementById("s4t-x").addEventListener("click", hide);
-  document.getElementById("s4t-close").addEventListener("click", hide);
-  document.getElementById("s4t-backdrop").addEventListener("click", hide);
+  function closeConfirm() { onYes = null; $("dc-cback").style.display = "none"; $("dc-confirm").style.display = "none"; }
+  $("dc-cno").addEventListener("click", closeConfirm);
+  $("dc-cback").addEventListener("click", closeConfirm);
+  $("dc-cyes").addEventListener("click", function () { var go = onYes; if ($("dc-cyes").disabled) { return; } closeConfirm(); if (go) { go(); } });
   document.addEventListener("keydown", function (e) {
-    if (e.key === "Escape" && open) { hide(); }
+    if ($("dc-confirm").style.display === "none") { return; }
+    if (e.key === "Escape") { closeConfirm(); }
+    if (e.key === "Enter" && !$("dc-cyes").disabled) { $("dc-cyes").click(); }
   });
 
-  // ---- the table behind the dialog -------------------------------------
-  // Cells are updated in place rather than the body being rebuilt, so the
-  // row identity survives and nothing flickers. Polling rather than SSE
-  // because a stream to the aggregator would be cross origin and would put
-  // its credentials back in the browser, which this panel exists to avoid.
-  function setCell(uuid, cls, html) {
-    var row = document.getElementById("row-" + uuid);
-    if (!row) { return; }
-    var el = row.querySelector("." + cls);
-    if (el) { el.innerHTML = html; }
+  // ---- refresh --------------------------------------------------------------
+  function refreshList() {
+    call("GET", "data/").then(function (r) {
+      if (!r.ok || r.data.error) { renderStrip(); return; }
+      boards = r.data.boards || []; lastListOk = Date.now();
+      totals = r.data.totals || {}; health = r.data.health || [];
+      var se = r.data.source_errors || {};
+      $("dc-srcerr").innerHTML = Object.keys(se).map(function (k) {
+        return '<div class="dc-banner"><strong>' + esc(k) + ':</strong> <span class="dc-mono">' + esc(se[k]) + '</span></div>';
+      }).join("");
+      renderStrip(); renderList(); renderPaths();
+      if (sel) {
+        var b = byId(sel);
+        if (!b) { sel = null; renderDetail(); return; }
+        var f = $("dc-f-status");
+        if (f && f.textContent !== stWord(b)) { renderDetail(); loadTwin(); }
+        else {
+          if ($("dc-f-age")) { $("dc-f-age").innerHTML = freshness(b) || "-"; }
+          if ($("dc-f-last")) { $("dc-f-last").innerHTML = lastAction(b); }
+        }
+      }
+    }).catch(function () { renderStrip(); });
   }
-  function refresh() {
-    fetch(DATA, {credentials: "same-origin"})
-      .then(function (r) { return r.json(); })
-      .then(function (d) {
-        if (d.error) { return; }               // keep the last good render
-        (d.boards || []).forEach(function (b) {
-          setCell(b.uuid, "c-status", '<span class="label label-' +
-            (b.online ? "success" : "default") + '">' + esc(b.status) + '</span>');
-          setCell(b.uuid, "c-agent", b.agent_seen ? esc(b.lr_version)
-            : '<span class="s4t-muted">never seen</span>');
-          setCell(b.uuid, "c-twin", b.twin.present ? "rev " + esc(b.twin.revision)
-            : '<span class="s4t-stale">missing</span>');
-          setCell(b.uuid, "c-tele", b.twin.telemetry
-            ? Object.keys(b.twin.telemetry).map(function (k) {
-                return esc(k) + "=" + esc(b.twin.telemetry[k]); }).join(" ")
-            : '<span class="s4t-muted">no telemetry</span>');
-          setCell(b.uuid, "c-age",
-            (b.twin.age_human === null || b.twin.age_human === undefined)
-            ? '<span class="s4t-muted">unknown</span>'
-            : '<span class="' + (b.twin.stale ? "s4t-stale" : "s4t-fresh") + '">' +
-              esc(b.twin.age_human) + '</span>');
-          setCell(b.uuid, "c-action", esc(b.audit.last_action || "-"));
-          setCell(b.uuid, "c-by", esc(b.audit.last_operator || "-"));
-          setCell(b.uuid, "c-count", esc(b.audit.count));
-        });
-        var g = document.getElementById("s4t-generated");
-        if (g && d.generated_at) { g.textContent = d.generated_at; }
-      })
-      .catch(function () { /* leave the last good render on screen */ });
-  }
-  setInterval(refresh, 5000);
+
+  lastListOk = boards.length || !CFG.list_error ? Date.now() : null;
+  renderStrip(); renderList(); renderPaths();
+  if (CFG.open_board && byId(CFG.open_board)) { select(CFG.open_board); }
+  else if (boards.length === 1) { select(boards[0].uuid); }
+  timers.push(setInterval(refreshList, 5000));
+  timers.push(setInterval(loadTwin, 3000));
+  timers.push(setInterval(renderStrip, 1000));
 })();
 </script>
 {% endblock %}

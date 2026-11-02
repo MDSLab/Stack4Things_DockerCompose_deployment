@@ -12,6 +12,8 @@ Project: Stack4Things, Industry 5.0 extension work
 
 ---
 
+> **Update, 1 November 2026.** The Overview is no longer read only. The separate Device Control panel was merged into it: the page now lists machines on the left and shows the selected machine's twin, its controls and its activity on the right, replacing the board table and the detail dialog described below. The aggregator, the joins and the configuration in this document are unchanged. See `docs/Device_Control_Actions.md` for the actions and the new layout.
+
 ## 1. What it is
 
 The IoT Overview is a page inside Horizon, in the IoT section of the sidebar, above Boards. It shows every registered board together with its digital twin and its audit history, on one screen.
@@ -120,7 +122,9 @@ Both are ordinary directories inside the image, so both can be supplied by a bin
 
 Two details are worth writing down because they are easy to get wrong.
 
-**The number in the filename is the position in the sidebar.** Horizon processes these files in filename order. The existing panels are numbered 6010 for Boards through 6050 for Fleets, and 6000 registers the IoT section itself. Naming this file 6005 puts Overview first in the group. Renaming the file is the entire mechanism for moving it.
+**The panel group must be `default`.** The IoT dashboard declares its panels as a flat list, so they live in Horizon's unnamed `default` group. An earlier version used `PANEL_GROUP = 'iot'`, a group that does not exist; Horizon then put the panel in a catch-all group labelled "Other", visible in the sidebar and as "IoT / Other" in the breadcrumb. (Corrected 1 November 2026.)
+
+**The number in the filename is not the position.** It orders how Horizon processes the files. A panel added this way is appended to its group, so Overview appears after Fleets. Setting `DEFAULT_PANEL = 'iot_overview'` makes the IoT section open on it.
 
 **The live code is not in `/opt/build`.** That directory holds the source checkout used when the image was built. The package Python actually imports is the copy in `dist-packages`. Mounting over `/opt/build` looks correct and has no effect at all.
 

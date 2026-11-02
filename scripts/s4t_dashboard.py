@@ -305,6 +305,143 @@ def read_board_events(store, uuid, limit=50):
     return out
 
 
+# =========================================================================
+# Searching one board's activity
+# =========================================================================
+# A real device reports every few seconds, so a board's history is mostly
+# telemetry within hours. Showing "the last 15 records" stops being useful
+# almost immediately; the operator needs to ask a question of the history.
+# So filtering happens HERE, in SQL over the whole store, not in the browser
+# over whatever page happens to be loaded.
+#
+# Categories are the operator's words for groups of machine_action values.
+# Every pattern is a LIKE pattern applied to a column, never to user input.
+ACTIVITY_CATEGORIES = {
+    "commands":  ("device.%", "board.action"),
+    "twin":      ("desired.%",),
+    "telemetry": ("telemetry.%",),
+    "software":  ("plugin.%", "service.%"),
+    "admin":     ("board.create", "board.update", "board.delete"),
+    "system":    ("twin.%", "prediction.%", "api.%"),
+}
+ACTIVITY_ACTORS = ("human", "device", "system", "unknown")
+ACTIVITY_OUTCOMES = ("success", "failure")
+ACTIVITY_SINCE = {"1h": 3600, "24h": 86400, "7d": 7 * 86400, "30d": 30 * 86400}
+ACTIVITY_PAGE = 50
+ACTIVITY_PAGE_MAX = 200
+
+
+def _like_escape(text):
+    """User text inside a LIKE pattern, with its wildcards made literal."""
+    return (text.replace("\\", "\\\\").replace("%", "\\%")
+                .replace("_", "\\_"))
+
+
+def build_board_events_query(uuid, params, now=None):
+    """(where_sql, args, limit) for one board's activity. Pure, so every
+    filter is testable without a database, and parameterised, so no value the
+    operator types can change the shape of the query.
+
+    Recognised parameters, all optional; anything else is ignored:
+        q               free text, matched in the action, the operator name and
+                        the stored record (so a property name or an error
+                        message is findable)
+        category        one of ACTIVITY_CATEGORIES
+        hide_telemetry  "1" drops telemetry.* unless category is telemetry
+        actor           one of ACTIVITY_ACTORS
+        outcome         success | failure
+        operator        exact Keystone user name
+        since           one of ACTIVITY_SINCE
+        before_seq      only records older than this sequence (paging)
+        limit           page size, default 50, at most 200
+    """
+    now = now or datetime.now(timezone.utc)
+    where, args = ["machine_id = ?"], [uuid]
+
+    cat = params.get("category")
+    if cat in ACTIVITY_CATEGORIES:
+        pats = ACTIVITY_CATEGORIES[cat]
+        where.append("(" + " OR ".join(["machine_action LIKE ?"] * len(pats)) + ")")
+        args.extend(pats)
+    if params.get("hide_telemetry") in ("1", "true") and cat != "telemetry":
+        where.append("machine_action NOT LIKE 'telemetry.%'")
+
+    if params.get("actor") in ACTIVITY_ACTORS:
+        where.append("actor_type = ?")
+        args.append(params["actor"])
+    if params.get("outcome") in ACTIVITY_OUTCOMES:
+        # Not a column; read from the stored record. Records without an
+        # outcome (very old ones) count as neither.
+        where.append("json_extract(record, '$.action.outcome') = ?")
+        args.append(params["outcome"])
+    op = (params.get("operator") or "").strip()
+    if op:
+        where.append("operator_name = ?")
+        args.append(op[:128])
+    if params.get("since") in ACTIVITY_SINCE:
+        start = now.timestamp() - ACTIVITY_SINCE[params["since"]]
+        where.append("timestamp >= ?")
+        args.append(datetime.fromtimestamp(start, timezone.utc)
+                    .strftime("%Y-%m-%dT%H:%M:%S"))
+
+    q = (params.get("q") or "").strip()[:100]
+    if q:
+        pat = "%" + _like_escape(q) + "%"
+        where.append("(machine_action LIKE ? ESCAPE '\\' "
+                     "OR IFNULL(operator_name, '') LIKE ? ESCAPE '\\' "
+                     "OR record LIKE ? ESCAPE '\\')")
+        args.extend([pat, pat, pat])
+
+    try:
+        before = int(params.get("before_seq") or 0)
+    except (TypeError, ValueError):
+        before = 0
+    if before > 0:
+        where.append("sequence < ?")
+        args.append(before)
+
+    try:
+        limit = int(params.get("limit") or ACTIVITY_PAGE)
+    except (TypeError, ValueError):
+        limit = ACTIVITY_PAGE
+    limit = max(1, min(limit, ACTIVITY_PAGE_MAX))
+    return " AND ".join(where), args, limit
+
+
+def search_board_events(store, uuid, params, now=None):
+    """One page of a board's activity, newest first, plus what the page needs
+    to offer the next one.
+
+    `has_more` is decided by fetching one row past the page rather than by
+    counting: a COUNT over a long history costs a full scan of the board's
+    records on every keystroke. `total` is therefore only reported for the
+    unfiltered question of how many records the board has at all, which an
+    index answers.
+    """
+    where, args, limit = build_board_events_query(uuid, params, now)
+    rows = store.db.execute(
+        "SELECT sequence, record FROM audit_events WHERE " + where +
+        " ORDER BY sequence DESC LIMIT ?", args + [limit + 1]).fetchall()
+    has_more = len(rows) > limit
+    events = []
+    for seq, blob in rows[:limit]:
+        try:
+            events.append(json.loads(blob))
+        except (ValueError, TypeError):
+            continue
+    operators = [r[0] for r in store.db.execute(
+        "SELECT DISTINCT operator_name FROM audit_events "
+        "WHERE machine_id = ? AND operator_name IS NOT NULL "
+        "ORDER BY operator_name LIMIT 100", (uuid,)).fetchall()]
+    return {
+        "events": events,
+        "has_more": has_more,
+        "next_before": rows[limit - 1][0] if has_more else None,
+        "operators": operators,
+        "limit": limit,
+    }
+
+
 def read_audit(store):
     """Per board summary and per source freshness, straight from SQLite."""
     rows = store.db.execute(
@@ -399,6 +536,21 @@ def make_dashboard_app(store, cfg=None):
             out["errors"]["events"] = str(exc)
         return web.json_response(out)
 
+    async def board_events(request):
+        """One board's activity, searched and filtered. See
+        build_board_events_query for the parameters."""
+        uuid = request.match_info["uuid"]
+        loop = asyncio.get_running_loop()
+        try:
+            out = await loop.run_in_executor(
+                None, search_board_events, store, uuid, dict(request.query))
+        except Exception as exc:
+            LOG.warning("activity search failed for %s: %s", uuid, exc)
+            return web.json_response({"events": [], "has_more": False,
+                                      "error": "activity search failed"},
+                                     status=500)
+        return web.json_response(out)
+
     async def health(request):
         return web.json_response({"status": "ok"})
 
@@ -406,6 +558,7 @@ def make_dashboard_app(store, cfg=None):
     app.add_routes([
         web.get("/data", data),
         web.get("/board/{uuid}", board),
+        web.get("/board/{uuid}/events", board_events),
         web.get("/health", health),
     ])
     return app
